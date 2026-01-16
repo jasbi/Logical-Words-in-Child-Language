@@ -18,7 +18,7 @@ We use the package `r childesr` to access the data in the CHILDES database. The 
 
 ```{r ChildesDBimports}
 #Getting data from 1270 children in 73 corpora...
-all_english_tokens <- get_tokens(collection = c("Eng-NA","Eng-UK"), 
+all_spanish_tokens <- get_tokens(collection = c("spanish"), 
                           role = c("target_child","Mother", "Father"),
                           token = "*")
 ```
@@ -26,7 +26,7 @@ all_english_tokens <- get_tokens(collection = c("Eng-NA","Eng-UK"),
 We save the downladed data as an RDS file for future use:
 
 ```{r}
-write_csv(all_english_tokens, "../raw_data/all_english_tokens.csv")
+write_csv(all_spanish_tokens, "../raw_data/all_spanish_tokens.csv")
 ```
 
 # Token Processing

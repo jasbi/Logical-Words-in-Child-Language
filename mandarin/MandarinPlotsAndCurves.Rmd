@@ -1,0 +1,1093 @@
+---
+title: "Mandarin Plots and Curves"
+author: "Samantha Bai"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+# Setup
+Loads the libraries needed throughout.
+```{r packages, include=FALSE}
+library(tidyverse)
+library(arrow) # reading feather data file
+library(brms) # Bayesian regression models
+library(ggeffects) # with model predictions
+library(ggrepel)
+library(grid) #  arranging multi-panel plot collages
+library(gridExtra)
+```
+
+```{r}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+# Load Data
+This section initializes the analytic pipeline by reading in a pre-processed corpus of Mandarin child-directed and child-produced tokens drawn from the CHILDES database. The purpose of this section is infrastructural: it ensures that the working dataset, organized at the token level by speaker, age, and lexical/grammatical features, is available for all subsequent frequency computations and growth-curve modeling. The directory-creation calls reflect a defensive coding practice intended to guarantee that downstream model artifacts and processed outputs can be written without runtime error.
+```{r processedMandarinTokens}
+# Create directories if they don't exist
+dir.create("../mandarin/mandarin_model/modeling", showWarnings = FALSE, recursive = TRUE)
+dir.create("../mandarin/mandarin_data/processed_data", showWarnings = FALSE, recursive = TRUE)
+
+mandarin_tokens_processed <- read_feather("../mandarin/mandarin_data/processed_data/mandarin_tokens_processed.feather")
+```
+
+# Computing Cumulative Relative Frequencies
+
+Note: Unlike English, Mandarin does not have contractions. We work directly with `mandarin_tokens_processed`.
+
+This section is the quantitative foundation of the entire analysis. The goal is to characterize how often particular linguistic items, both broad syntactic categories (function vs. content words) and individual function words, occur in children's and caregivers' speech across developmental time. The cumulative formulation, in which numerator and denominator are summed over all preceding ages, is adopted to smooth out the considerable monthly noise inherent in naturalistic transcript data and to yield monotonically non-decreasing trajectories that are amenable to parametric growth-curve fitting. 
+
+## Function vs. Content Words
+
+Here we compute cumulative relative frequencies of function vs. content words by grouping by "syntactic category":
+
+This block computes, separately for parents and children, the cumulative relative frequency of function words and content words as proportions of all tokens produced through each age. The aim is to quantify the developmental trajectory of broad syntactic category use, capturing the well-documented phenomenon by which the proportion of function words in children's productions rises gradually across early childhood as grammatical morphology and closed-class items emerge.
+
+```{r}
+syncategory_relfreq <-
+  mandarin_tokens_processed %>%
+  group_by(syncategory, speaker, age) %>%
+  summarise(freq = n()) %>%
+  mutate(freq = ifelse(age <= 12, 0, freq)) %>% 
+  mutate(total=sum(freq), relfreq=freq/sum(freq), pct=relfreq*100) %>%
+  group_by(syncategory, speaker) %>%
+  arrange(age) %>%
+  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_pct=cumulative_relfreq*100)
+
+saveRDS(syncategory_relfreq, "syncategory_relfreq.RDS")
+```
+
+## Individual Function Words
+
+Here we compute cumulative relative frequencies for individual function words by grouping by "word". 
+
+This section disaggregates to the level of individual lexical items. The data are restricted to ages of ten months or older, reflecting the empirical observation that children produce essentially no recorded speech prior to that age. This object provides the raw material for fitting word-specific growth curves and estimating the age at which each individual function word enters productive use.
+```{r}
+functionword_relfreq <-
+  mandarin_tokens_processed %>%
+  group_by(word, speaker, age) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  mutate(freq = ifelse(age <= 12, 0, freq)) %>%   # zero numerator for early ages
+  group_by(speaker, age) %>%
+  mutate(total=sum(freq), relfreq=freq/sum(freq), ppt=relfreq*1000) %>%
+  group_by(word, speaker) %>%
+  arrange(age) %>%
+  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_ppt=cumulative_relfreq*1000)
+
+saveRDS(functionword_relfreq, "functionword_relfreq.RDS")
+```
+
+## Function Word Semantic Categories
+
+Here we compute cumulative relative frequencies by semantic categories. However, we have not planned any analyses of these yet.
+
+This block applies the same cumulative relative-frequency machinery at an intermediate level of granularity, grouping function words by semantic category (e.g., negation, conjunction).
+
+```{r}
+wordcategory_relfreq <-
+  mandarin_tokens_processed %>%
+  group_by(word_category, speaker, age) %>%
+  summarise(freq = n()) %>%
+  mutate(freq = ifelse(age <= 12, 0, freq)) %>% 
+  group_by(speaker, age) %>%
+  mutate(total=sum(freq), relfreq=freq/sum(freq), ppt=relfreq*1000) %>%
+  group_by(word_category, speaker) %>%
+  arrange(age) %>%
+  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total))
+
+saveRDS(wordcategory_relfreq, "wordcategory_relfreq.RDS")
+```
+
+# Plots and Growth Curves
+
+This section moves from descriptive frequency computation to inferential modeling. The unifying goal is to fit a parametric developmental trajectory to each frequency time series, thereby summarizing each curve in terms of a small number of psychologically interpretable parameters.
+
+## Content vs. Function Word Production
+
+The graph below shows percent word category (content vs. function word) in each monthly bin during the development of the child for parents and children.
+
+This subsection applies the modeling framework to the aggregate function-word percentage in child speech.  The plotting code first visualizes the raw percent-function-word trajectory, faceted by speaker so that adult input and child production can be inspected side by side. The Bayesian model is then fit to the child data alone, with uniform priors placed on the upper asymptote, the growth rate, and the lag. Posterior fitted values are then merged with the observed data and overlaid as a fitted curve, providing a visual diagnostic of model fit. The purpose of beginning with the aggregate function-word category, rather than with individual words, is to establish a benchmark trajectory against which the developmental timing of specific function words can be compared.
+
+```{r}
+function_words_plot <-
+  syncategory_relfreq %>%
+  filter(syncategory=="Function") %>%
+  ggplot(aes(age, pct)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Percentage") + 
+  scale_y_continuous(limits = c(0, 100)) +
+  theme(text = element_text(size = 14))
+```
+
+```{r function_words_growth_model, include=FALSE}
+function_words_lagModel <- brm(
+  bf(pct  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(syncategory_relfreq, syncategory=="Function", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 100), nlpar = "upperAsymptote", lb = 0, ub = 100),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/mandarin_function_word_lagModel",
+  iter = 10000)
+```
+
+```{r function_word_predictions}
+function_words_predictions <- as.data.frame(fitted(function_words_lagModel))
+
+function_words_childdata <- filter(syncategory_relfreq, syncategory=="Function", speaker=="child")
+function_words_childdata$predictions <- function_words_predictions[, "Estimate"]
+
+saveRDS(function_words_childdata, "../mandarin/mandarin_data/processed_data/mandarin_function_words_childdata.RDS")
+```
+
+```{r function_words_prediction_plot} 
+function_words_plot <-
+  ggplot(function_words_childdata, aes(x = age, y = pct)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Function Words", x="Child Age (Month)", y="Percent") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+function_words_plot
+```
+
+
+## Distribution of Individual Function Words
+
+This is the analytic heart of the document. For each individual function word of theoretical interest, an essentially identical four-step procedure is executed: 
+(i) plot the raw cumulative parts-per-thousand trajectory, faceted by speaker 
+(ii) fit the Gompertz lag-curve model to the child trajectory under uniformly-distributed priors whose upper bounds on the asymptote are tailored to the empirical magnitude of the word in question
+(iii) extract posterior fitted values, attach them to the observed data, and produce an overlay plot
+(iv) append the posterior estimate, standard error, and 95 percent credible interval for the lag parameter to a cumulative age_of_production table. The function words analyzed are organized into theoretically motivated subcategories.
+
+### Negation
+
+##### 不 bù (general negation)
+
+```{r bu_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="不") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("不 bù") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+Fitting the the data to the Bayesian growth curve. 
+
+Children do not say anything for the first 10 monthes
+
+```{r bu_growth_model, include=FALSE}
+bu_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="不", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 40), nlpar = "upperAsymptote", lb = 0, ub = 40),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/bu_lagModel",
+  iter = 10000)
+```
+
+```{r bu_predictions}
+bu_predictions <- as.data.frame(fitted(bu_lagModel))
+
+bu_childdata <- filter(functionword_relfreq, word=="不", speaker=="child")
+bu_childdata$predictions <- bu_predictions[, "Estimate"]
+
+saveRDS(bu_childdata, "../mandarin/mandarin_data/processed_data/bu_childdata.RDS")
+```
+
+```{r bu_age_of_production}
+age_of_production <- 
+  data.frame(word = c("不 bù"), 
+           Estimate = c(round(fixef(bu_lagModel)[3,1],1)),
+           Est.Error = c(round(fixef(bu_lagModel)[3,2],1)),
+           Q2.5 = c(round(fixef(bu_lagModel)[3,3],1)),
+           Q97.5 = c(round(fixef(bu_lagModel)[3,4],1))
+           )
+```
+
+```{r bu_prediction_plot} 
+bu_plot <-
+  ggplot(bu_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="不 bù", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+##### 没 méi (negation of have/completion)
+
+```{r mei_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="没") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("没 méi") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r mei_growth_model, include=FALSE}
+mei_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="没", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 20), nlpar = "upperAsymptote", lb = 0, ub = 20),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/mei_lagModel",
+  iter = 10000)
+```
+
+```{r mei_predictions}
+mei_predictions <- as.data.frame(fitted(mei_lagModel))
+
+mei_childdata <- filter(functionword_relfreq, word=="没", speaker=="child")
+mei_childdata$predictions <- mei_predictions[, "Estimate"]
+
+saveRDS(mei_childdata, "../mandarin/mandarin_data/processed_data/mei_childdata.RDS")
+```
+
+```{r mei_prediction_plot} 
+mei_plot <-
+  ggplot(mei_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="没 méi", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r mei_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "没 méi",
+             Estimate  = round(fixef(mei_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(mei_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(mei_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(mei_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+##### 没有 méiyǒu (negation of have/completion)
+
+```{r meiyou_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="没有") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("没有 méiyǒu") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r meiyou_growth_model, include=FALSE}
+meiyou_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="没有", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 20), nlpar = "upperAsymptote", lb = 0, ub = 20),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/meiyou_lagModel",
+  iter = 10000)
+```
+
+```{r meiyou_predictions}
+meiyou_predictions <- as.data.frame(fitted(meiyou_lagModel))
+
+meiyou_childdata <- filter(functionword_relfreq, word=="没有", speaker=="child")
+meiyou_childdata$predictions <- meiyou_predictions[, "Estimate"]
+
+saveRDS(meiyou_childdata, "../mandarin/mandarin_data/processed_data/meiyou_childdata.RDS")
+```
+
+```{r meiyou_prediction_plot} 
+meiyou_plot <-
+  ggplot(meiyou_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="没有 méiyǒu", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r meiyou_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "没有 méiyǒu",
+             Estimate  = round(fixef(meiyou_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(meiyou_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(meiyou_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(meiyou_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+##### 别 bié (prohibitive negation / "don't")
+
+```{r bie_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="别") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("别 bié") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r bie_growth_model, include=FALSE}
+bie_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="别", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 10), nlpar = "upperAsymptote", lb = 0, ub = 10),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/bie_lagModel",
+  iter = 10000)
+```
+
+```{r bie_predictions}
+bie_predictions <- as.data.frame(fitted(bie_lagModel))
+
+bie_childdata <- filter(functionword_relfreq, word=="别", speaker=="child")
+bie_childdata$predictions <- bie_predictions[, "Estimate"]
+
+saveRDS(bie_childdata, "../mandarin/mandarin_data/processed_data/bie_childdata.RDS")
+```
+
+```{r bie_prediction_plot} 
+bie_plot <-
+  ggplot(bie_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="别 bié", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r bie_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "别 bié",
+             Estimate  = round(fixef(bie_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(bie_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(bie_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(bie_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+### Conjunction
+
+##### 和 hé
+
+```{r he_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="和") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("和 hé") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r he_growth_model, include=FALSE}
+he_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="和", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 10), nlpar = "upperAsymptote", lb = 0, ub = 10),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/he_lagModel",
+  iter = 10000)
+```
+
+```{r he_predictions}
+he_predictions <- as.data.frame(fitted(he_lagModel))
+
+he_childdata <- filter(functionword_relfreq, word=="和", speaker=="child")
+he_childdata$predictions <- he_predictions[, "Estimate"]
+
+saveRDS(he_childdata, "../mandarin/mandarin_data/processed_data/he_childdata.RDS")
+```
+
+```{r he_prediction_plot} 
+he_plot <-
+  ggplot(he_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="和 hé", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r he_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "和 hé",
+             Estimate  = round(fixef(he_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(he_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(he_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(he_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+##### 跟 gēn
+
+```{r gen_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="跟") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("跟 gēn") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r gen_growth_model, include=FALSE}
+gen_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="跟", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 10), nlpar = "upperAsymptote", lb = 0, ub = 10),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/gen_lagModel",
+  iter = 10000)
+```
+
+```{r gen_predictions}
+gen_predictions <- as.data.frame(fitted(gen_lagModel))
+
+gen_childdata <- filter(functionword_relfreq, word=="跟", speaker=="child")
+gen_childdata$predictions <- gen_predictions[, "Estimate"]
+
+saveRDS(gen_childdata, "../mandarin/mandarin_data/processed_data/gen_childdata.RDS")
+```
+
+```{r gen_prediction_plot} 
+gen_plot <-
+  ggplot(gen_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="跟 gēn", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r gen_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "跟 gēn",
+             Estimate  = round(fixef(gen_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(gen_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(gen_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(gen_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+
+##### 而且 érqiě ("and also/moreover")
+
+```{r erqie_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="而且") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("而且 érqiě") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r erqie_growth_model, include=FALSE}
+erqie_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="而且", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 5), nlpar = "upperAsymptote", lb = 0, ub = 5),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/erqie_lagModel",
+  iter = 10000)
+```
+
+```{r erqie_predictions}
+erqie_predictions <- as.data.frame(fitted(erqie_lagModel))
+
+erqie_childdata <- filter(functionword_relfreq, word=="而且", speaker=="child")
+erqie_childdata$predictions <- erqie_predictions[, "Estimate"]
+
+saveRDS(erqie_childdata, "../mandarin/mandarin_data/processed_data/erqie_childdata.RDS")
+```
+
+```{r erqie_prediction_plot} 
+erqie_plot <-
+  ggplot(erqie_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="而且 érqiě", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r erqie_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "而且 érqiě",
+             Estimate  = round(fixef(erqie_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(erqie_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(erqie_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(erqie_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+
+### Disjunction
+
+##### 或者 huòzhě
+
+```{r huozhe_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="或者") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("或者 huòzhě") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r huozhe_growth_model, include=FALSE}
+huozhe_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="或者", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 2), nlpar = "upperAsymptote", lb = 0, ub = 2),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/huozhe_lagModel",
+  iter = 10000)
+```
+
+```{r huozhe_predictions}
+huozhe_predictions <- as.data.frame(fitted(huozhe_lagModel))
+
+huozhe_childdata <- filter(functionword_relfreq, word=="或者", speaker=="child")
+huozhe_childdata$predictions <- huozhe_predictions[, "Estimate"]
+
+saveRDS(huozhe_childdata, "../mandarin/mandarin_data/processed_data/huozhe_childdata.RDS")
+```
+
+```{r huozhe_prediction_plot} 
+huozhe_plot <-
+  ggplot(huozhe_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="或者 huòzhě", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r huozhe_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "或者 huòzhě",
+             Estimate  = round(fixef(huozhe_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(huozhe_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(huozhe_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(huozhe_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+##### 还是 háishi ("or" in questions)
+
+```{r haishi_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="还是") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("还是 háishi") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r haishi_growth_model, include=FALSE}
+haishi_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="还是", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 5), nlpar = "upperAsymptote", lb = 0, ub = 5),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/haishi_lagModel",
+  iter = 10000)
+```
+
+```{r haishi_predictions}
+haishi_predictions <- as.data.frame(fitted(haishi_lagModel))
+
+haishi_childdata <- filter(functionword_relfreq, word=="还是", speaker=="child")
+haishi_childdata$predictions <- haishi_predictions[, "Estimate"]
+
+saveRDS(haishi_childdata, "../mandarin/mandarin_data/processed_data/haishi_childdata.RDS")
+```
+
+```{r haishi_prediction_plot} 
+haishi_plot <-
+  ggplot(haishi_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="还是 háishi", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r haishi_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "还是 háishi",
+             Estimate  = round(fixef(haishi_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(haishi_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(haishi_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(haishi_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+### Conditionals
+
+##### 如果 rúguǒ
+
+```{r ruguo_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="如果") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("如果 rúguǒ") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r ruguo_growth_model, include=FALSE}
+ruguo_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="如果", speaker=="child", age >= 24),
+  prior = c(
+    prior(uniform(0, 2), nlpar = "upperAsymptote", lb = 0, ub = 2),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/ruguo_lagModel",
+  iter = 10000)
+```
+
+```{r ruguo_predictions}
+ruguo_predictions <- as.data.frame(fitted(ruguo_lagModel))
+
+ruguo_childdata <- filter(functionword_relfreq, word=="如果", speaker=="child",age >= 24)
+ruguo_childdata$predictions <- ruguo_predictions[, "Estimate"]
+
+saveRDS(ruguo_childdata, "../mandarin/mandarin_data/processed_data/ruguo_childdata.RDS")
+```
+
+```{r ruguo_prediction_plot} 
+ruguo_plot <-
+  ggplot(ruguo_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="如果 rúguǒ", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r ruguo_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "如果 rúguǒ",
+             Estimate  = round(fixef(ruguo_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(ruguo_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(ruguo_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(ruguo_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+```{r}
+functionword_relfreq %>%
+  filter(word == "如果", speaker == "child") %>%
+  arrange(age) %>%
+  select(age, freq, total, cum_freq, cum_total, cumulative_ppt)
+
+```
+
+##### 要是 yàoshi (colloquial "if")
+
+```{r yaoshi_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="要是") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("要是 yàoshi") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r yaoshi_growth_model, include=FALSE}
+yaoshi_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="要是", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 2), nlpar = "upperAsymptote", lb = 0, ub = 2),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/yaoshi_lagModel",
+  iter = 10000)
+```
+
+```{r yaoshi_predictions}
+yaoshi_predictions <- as.data.frame(fitted(yaoshi_lagModel))
+
+yaoshi_childdata <- filter(functionword_relfreq, word=="要是", speaker=="child")
+yaoshi_childdata$predictions <- yaoshi_predictions[, "Estimate"]
+
+saveRDS(yaoshi_childdata, "../mandarin/mandarin_data/processed_data/yaoshi_childdata.RDS")
+```
+
+```{r yaoshi_prediction_plot} 
+yaoshi_plot <-
+  ggplot(yaoshi_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="要是 yàoshi", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r yaoshi_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "要是 yàoshi",
+             Estimate  = round(fixef(yaoshi_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(yaoshi_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(yaoshi_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(yaoshi_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+
+##### 的话 dehuà
+
+```{r dehua_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word=="的话") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("的话 dehuà") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r dehua_growth_model, include=FALSE}
+dehua_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="的话", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 2), nlpar = "upperAsymptote", lb = 0, ub = 2),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/dehua_lagModel",
+  iter = 10000)
+```
+
+```{r dehua_predictions}
+dehua_predictions <- as.data.frame(fitted(dehua_lagModel))
+
+dehua_childdata <- filter(functionword_relfreq, word=="的话", speaker=="child")
+dehua_childdata$predictions <- dehua_predictions[, "Estimate"]
+
+saveRDS(dehua_childdata, "../mandarin/mandarin_data/processed_data/dehua_childdata.RDS")
+```
+
+```{r dehua_prediction_plot} 
+dehua_plot <-
+  ggplot(dehua_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="的话 dehuà", x="", y="") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+```{r dehua_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(word      = "的话 dehuà",
+             Estimate  = round(fixef(dehua_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(dehua_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(dehua_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(dehua_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+)
+```
+
+
+# Collection of some plots
+
+This section assembles the individual fitted-curve plots into themed multi-panel figures. Arranging conceptually related words side by side allows the reader to visually compare acquisition trajectories within a semantic class, which is more informative than inspecting each fit in isolation.
+```{r}
+library(gridExtra)
+
+grid.arrange(bu_plot, mei_plot, meiyou_plot, bie_plot,
+             layout_matrix = rbind(c(1, 2), c(3, 4)),
+             bottom = textGrob("Age (Months)", gp = gpar(fontsize = 13)),
+             left   = textGrob("Words (Per Thousand)", gp = gpar(fontsize = 13), rot = 90))
+
+grid.arrange(he_plot, gen_plot, erqie_plot,
+             layout_matrix = rbind(c(1, 2), c(3, 4)),
+             bottom = textGrob("Age (Months)", gp = gpar(fontsize = 13)),
+             left   = textGrob("Words (Per Thousand)", gp = gpar(fontsize = 13), rot = 90))
+
+grid.arrange(huozhe_plot, haishi_plot,
+             layout_matrix = rbind(c(1, 2), c(3, 4)),
+             bottom = textGrob("Age (Months)", gp = gpar(fontsize = 13)),
+             left   = textGrob("Words (Per Thousand)", gp = gpar(fontsize = 13), rot = 90))
+
+grid.arrange(ruguo_plot, yaoshi_plot, dehua_plot,
+             layout_matrix = rbind(c(1, 2), c(3, 4)),
+             bottom = textGrob("Age (Months)", gp = gpar(fontsize = 13)),
+             left   = textGrob("Words (Per Thousand)", gp = gpar(fontsize = 13), rot = 90))
+```
+
+# Age of Production Plot
+
+This concluding section synthesizes the lag-parameter estimates accumulated across all individual word models into a single summary visualization. The resulting figure provides, on a single panel, an estimated developmental ordering of the analyzed function words together with a graphical representation of the uncertainty associated with each estimate. This visualization constitutes the principal empirical contribution of the document, condensing the entire word-by-word modeling effort into a single comparative display of when, on average and with what uncertainty, each function word enters productive child speech.
+
+```{r}
+age_of_production <- 
+  age_of_production %>%
+  mutate(word = fct_reorder(word, Estimate))
+
+saveRDS(age_of_production, "../mandarin/mandarin_data/processed_data/mandarin_age_of_production.RDS")
+```
+
+```{r}
+age_of_production <- readRDS("../mandarin/mandarin_data/processed_data/mandarin_age_of_production.RDS")
+
+functionword_onsetage_plot <-
+  age_of_production %>%
+  mutate(word = fct_reorder(word, Estimate)) %>%
+  ggplot(aes(x=Estimate, y=word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() + 
+  theme(axis.text.y = element_text(size = 12), xlab="age") +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(x = "Age (Months)", y="") +
+  theme(text = element_text(size = 12))
+```

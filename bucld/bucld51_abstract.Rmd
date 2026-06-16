@@ -37,39 +37,79 @@ We selected negation words serving comparable linguistic functions across langua
 
 **References** --Austin, K., Theakston, A., Lieven, E., & Tomasello, M. (2014). *Developmental Psychology*, 50(8), 2061–2070. -- Bloom, L. (1970). *Language development*. Cambridge, MA: MIT Press. --Bürkner, P.-C. (2017). *Journal of Statistical Software*. -- Cameron-Faulkner, T., Lieven, E., & Theakston, A. (2007). *Journal of Child Language* -- Choi, S. (1988). *Journal of Child Language*. -- de Carvalho, A., Crimon, C., Barrault, A., Trueswell, J., & Christophe, A. (2021). *Developmental Science*. -- de Carvalho, A., & Dautriche, I. (2025). *Cognition*. -- Feiman, R., Mody, S., Sanborn, S., & Carey, S. (2017). *Language Learning and Development*. Jasbi, M., McDermott-Hinman, A., Davidson, K., & Carey, S. (2020). *BUCLD45 Proceedings*. -- MacWhinney, Brian (2000) The CHILDES Project: The Database -- Nordmeyer, A. E., & Frank, M. C. (2014). *Journal of Memory and Language*. -- Pea, R. D. (1980). The development of negation in early child language. In D. R. Olson (Ed.), The social foundations of language and thought: Essays in honor of Jerome S. Bruner (pp. 156–186). New York, NY: W. W. Norton. -- Reuter, T., Feiman, R., & Snedeker, J. (2018). *Child Development*. -- Sanchez, Alessandro, Stephan Meylan, Mika Braginsky, Kyle MacDonald, Daniel Yurovsky, and Michael C Frank (2019). *Behavior Research Methods*. -- Szabó, E., Kovács, A., (2025) *Cognition*.
 
-```{r ageOfProductinoPlot, warning=FALSE,echo=FALSE, eval=FALSE, fig.env="figure", fig.height=9, include=FALSE, fig.cap="Estimated onset of production (lag value Lambda) for a sample of function words in the study."}
-modal_plot <- readRDS("can_childdata.RDS")
-
-plot1 <- ggplot(modal_plot, aes(x = age, y = cumulative_ppt)) +
-  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
-  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
-  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
-  labs(x = "Age (Months)", y="", title="Function Word: can") + 
-  theme_bw() + 
-  theme(legend.position = "top", legend.direction = "horizontal")
-
-age_of_production_plot <- readRDS("../processing/age_of_production.RDS")
-
-img_path <- "../pics/growthcurve.png"  # Replace with the actual path to your PNG image
-img <- readPNG(img_path)
-img_grob <- rasterGrob(img, interpolate = TRUE)
-
-# Create the ggplot
-plot2 <- age_of_production_plot %>%
-  filter(Estimate<40) %>%
-  ggplot(aes(x = Estimate, y = word)) +
-  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
-  theme_bw() +
+```{r bothPlotsOnePage, warning=FALSE, message=FALSE, echo=FALSE, fig.width=8.5, fig.height=11, out.width="100%", fig.align="center", fig.env="figure*"}
+# --- Figure 1: Growth curves ---
+combined_negation_plot <- readRDS(
+  "../summary/combined_outputs/negation_growth_curves_one_plot.rds"
+)
+combined_negation_plot <- combined_negation_plot &
   theme(
-    axis.text.x = element_text(size = 11),
-    axis.text.y = element_text(size = 12),
-    axis.title.x = element_text(size = 15)
-  ) +
-  labs(x = "Age (Months)", y = "") +
-  scale_x_continuous(breaks = seq(0, 60, by = 3))
+    plot.title    = element_text(size = 14),
+    plot.subtitle = element_text(size = 9),
+    axis.title    = element_text(size = 12),
+    axis.text     = element_text(size = 9),
+    plot.margin   = margin(4, 36, 4, 4)
+  )
 
-# Combine the ggplot and the image
-grid.arrange(plot2, img_grob, plot1, layout_matrix = rbind(c(1, 2), c(1, 3)))
+# --- Figure 2: Age of production ---
+age_of_production_plot <- readRDS("../summary/combined_negation_age_of_production.RDS") %>%
+  mutate(
+    word = word %>%
+      str_remove_all("[\u4e00-\u9fff]") %>%
+      str_squish() %>%
+      stri_trans_nfc()
+  ) %>%
+  mutate(
+    plot_id = paste(word, language, sep = "___"),
+    plot_id = fct_reorder(plot_id, Estimate)
+  )
+
+age_plot <- ggplot(age_of_production_plot,
+                   aes(x = plot_id, y = Estimate, color = language)) +
+  geom_point(size = 1.7) +
+  geom_errorbar(aes(ymin = Q2.5, ymax = Q97.5), width = 0.15, linewidth = 0.35) +
+  coord_flip() +
+  scale_x_discrete(labels = setNames(age_of_production_plot$word,
+                                     age_of_production_plot$plot_id)) +
+  labs(x = "Negation word", y = "Estimated age of production", color = "Language") +
+  theme_bw(base_size = 7) +
+  theme(
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 11),
+    legend.position = "bottom",
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 11),
+    legend.key.size = unit(0.25, "cm")
+  )
 ```
+
+```{r}
+#| label: fig-growth
+#| echo: false
+#| warning: false
+#| message: false
+#| fig.pos: "H"
+#| fig.width: 8
+#| fig.height: 5
+#| out.width: "100%"
+#| fig.align: "center"
+#| fig.cap: "Cumulative relative frequency (words per thousand) for the negation words in children's productions."
+combined_negation_plot
+```
+
+```{r}
+#| label: fig-onset
+#| echo: false
+#| warning: false
+#| message: false
+#| fig.pos: "H"
+#| fig.width: 8
+#| fig.height: 3
+#| out.width: "100%"
+#| fig.align: "center"
+#| fig.cap: "Estimated onset of production (lag value $\\lambda$) for negation words in the study."
+age_plot
+```
+
 
 

@@ -1,0 +1,72 @@
+---
+fontsize: 11pt
+title: ""
+# bibliography: ../negation_production_references.bib
+output: pdf_document
+---
+
+\begin{center} \textbf{Population-level Corpus-Derived Age-of-Acquisition Estimates for Negative Morphemes in Six Languages} \end{center}
+
+<!-- This gets rid of page numbers -->
+\pagenumbering{gobble}
+
+```{r packages, echo=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(ggthemes)
+library(gridExtra)
+library(grid)
+library(png)
+#library(wordcountaddin)
+```
+
+**Overview** -- Children begin acquiring negative morphemes like *no* early, though exactly when remains contested. Recent experimental evidence suggests that 18-to–24-month-olds can already understand negative sentences in English (de Carvalho, & Dautriche, 2025), French (de Carvalho et al., 2020), and Hungarian (Szabó & Kovács, 2025); yet other studies have failed to find such comprehension abilities in the same age range, or even in older children (Austin et al., 2014; Feiman et al., 2017; Nordmeyer & Frank, 2014; Reuter et al., 2018), suggesting possible experimental task effects. Children's early production of negative morphemes has been documented across languages and corpora (Bloom, 1970; Choi, 1988; Pea, 1980; Cameron-Faulkner et al., 2007; Jasbi et al., 2020; inter alia), but no systematic method exists for estimating the population-level age at which children begin producing negative morphemes using corpus data. We address this gap by applying Bayesian growth-curve modeling to child language corpora, developing a novel approach to estimating population-level age of acquisition for negative morphemes. Our results show that across six languages (English, Spanish, French, Mandarin Chinese, German, and Japanese), children begin producing a wide variety of negative morphemes between 12 and 24 months. Together with the experimental evidence cited above, these results provide converging support for the view that negation emerges in both comprehension and production within children's second year of life.
+
+```{r exclusions, include=FALSE, eval=FALSE}
+#exclusions <- read_csv("../raw_data/token_exclusions.csv")
+```
+
+**Methods** -- We used the following corpora in CHILDES [CHILDES](https://childes.talkbank.org/) (MacWhinney 2000), accessed via the online database [childes-db.stanford.edu](childes-db.stanford.edu) and its associated R package \{childsr\} (Sanchez et al. 2019): [list the collections] Our collection contained [token and child count per language]. We compiled and edited a list of negation words in . All tokens were annotated for the age of the child (in months) as well as whether the token was produced by parents or children. We computed the "cumulative relative frequency" of each function word by dividing its frequency up to that month by the frequency of all the words produced by children/parents up to that month.
+
+**Results** -- Figure 1 shows the cumulative relative frequency of X negative morphemes by children's age (months) in English, French, German, Mandarin Chinese, Spanish, and Japanese. For most negative morphemes, cumulative relative frequencies follow a nonlinear S curve across development with a period of accelerated growth, a period of slowdown, and a final stage of stable production. We fit separate Bayesian growth curve models to the cumulative relative frequency of each function word using the BRMS package (Bürkner 2017). We used growth curves with three parameters: 1. Lambda (lag): estimating the age at which production starts; 2. Miu: maximum rate of growth; and 3. A: maximum growth (Figure 2, right). Uniform priors were chosen for all three parameters. Figure 2 (Left) shows the onset of production estimates for all negative morphemes in our study.  ($\beta=$ = , $t=$ = , $p=$ = ).
+
+\footnotesize
+\hfill Word Count: 497
+
+**References** --Austin, K., Theakston, A., Lieven, E., & Tomasello, M. (2014). *Developmental Psychology*, 50(8), 2061–2070. -- Bloom, L. (1970). *Language development*. Cambridge, MA: MIT Press. --Bürkner, P.-C. (2017). *Journal of Statistical Software*. -- Cameron-Faulkner, T., Lieven, E., & Theakston, A. (2007). *Journal of Child Language* -- Choi, S. (1988). *Journal of Child Language*. -- de Carvalho, A., Crimon, C., Barrault, A., Trueswell, J., & Christophe, A. (2021). *Developmental Science*. -- de Carvalho, A., & Dautriche, I. (2025). *Cognition*. -- Feiman, R., Mody, S., Sanborn, S., & Carey, S. (2017). *Language Learning and Development*. Jasbi, M., McDermott-Hinman, A., Davidson, K., & Carey, S. (2020). *BUCLD45 Proceedings*. -- MacWhinney, Brian (2000) The CHILDES Project: The Database -- Nordmeyer, A. E., & Frank, M. C. (2014). *Journal of Memory and Language*. -- Pea, R. D. (1980). The development of negation in early child language. In D. R. Olson (Ed.), The social foundations of language and thought: Essays in honor of Jerome S. Bruner (pp. 156–186). New York, NY: W. W. Norton. -- Reuter, T., Feiman, R., & Snedeker, J. (2018). *Child Development*. -- Sanchez, Alessandro, Stephan Meylan, Mika Braginsky, Kyle MacDonald, Daniel Yurovsky, and Michael C Frank (2019). *Behavior Research Methods*. -- Szabó, E., Kovács, A., (2025) *Cognition*.
+
+```{r ageOfProductinoPlot, warning=FALSE,echo=FALSE, eval=FALSE, fig.env="figure", fig.height=9, include=FALSE, fig.cap="Estimated onset of production (lag value Lambda) for a sample of function words in the study."}
+modal_plot <- readRDS("can_childdata.RDS")
+
+plot1 <- ggplot(modal_plot, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  labs(x = "Age (Months)", y="", title="Function Word: can") + 
+  theme_bw() + 
+  theme(legend.position = "top", legend.direction = "horizontal")
+
+age_of_production_plot <- readRDS("../processing/age_of_production.RDS")
+
+img_path <- "../pics/growthcurve.png"  # Replace with the actual path to your PNG image
+img <- readPNG(img_path)
+img_grob <- rasterGrob(img, interpolate = TRUE)
+
+# Create the ggplot
+plot2 <- age_of_production_plot %>%
+  filter(Estimate<40) %>%
+  ggplot(aes(x = Estimate, y = word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size = 11),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 15)
+  ) +
+  labs(x = "Age (Months)", y = "") +
+  scale_x_continuous(breaks = seq(0, 60, by = 3))
+
+# Combine the ggplot and the image
+grid.arrange(plot2, img_grob, plot1, layout_matrix = rbind(c(1, 2), c(1, 3)))
+```
+
+

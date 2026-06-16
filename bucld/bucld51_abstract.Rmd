@@ -2,7 +2,9 @@
 fontsize: 11pt
 title: ""
 # bibliography: ../negation_production_references.bib
-output: pdf_document
+output: 
+  pdf_document:
+    extra_dependencies: ["float"]
 ---
 
 \begin{center} \textbf{Population-level Corpus-Derived Age-of-Acquisition Estimates for Negative Morphemes in Six Languages} \end{center}
@@ -16,7 +18,13 @@ library(ggthemes)
 library(gridExtra)
 library(grid)
 library(png)
+library(ggplot2)
+library(dplyr)
+library(forcats)
+library(patchwork)
+library(stringi)
 #library(wordcountaddin)
+knitr::opts_chunk$set(dev = "ragg_png", dpi = 300)
 ```
 
 **Overview** -- Children begin acquiring negative morphemes like *no* early, though exactly when remains contested. Recent experimental evidence suggests that 18-to–24-month-olds can already understand negative sentences in English (de Carvalho, & Dautriche, 2025), French (de Carvalho et al., 2020), and Hungarian (Szabó & Kovács, 2025); yet other studies have failed to find such comprehension abilities in the same age range, or even in older children (Austin et al., 2014; Feiman et al., 2017; Nordmeyer & Frank, 2014; Reuter et al., 2018), suggesting possible experimental task effects. Children's early production of negative morphemes has been documented across languages and corpora (Bloom, 1970; Choi, 1988; Pea, 1980; Cameron-Faulkner et al., 2007; Jasbi et al., 2020; inter alia), but no systematic method exists for estimating the population-level age at which children begin producing negative morphemes using corpus data. We address this gap by applying Bayesian growth-curve modeling to child language corpora, developing a novel approach to estimating population-level age of acquisition for negative morphemes. Our results show that across six languages (English, Spanish, French, Mandarin Chinese, German, and Japanese), children begin producing a wide variety of negative morphemes between 12 and 24 months. Together with the experimental evidence cited above, these results provide converging support for the view that negation emerges in both comprehension and production within children's second year of life.

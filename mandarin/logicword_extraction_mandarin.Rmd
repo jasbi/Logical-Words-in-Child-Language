@@ -55,14 +55,14 @@ feather_path <- "../mandarin/mandarin_data/raw_data/all_mandarin_tokens.feather"
 csv_path <- "../mandarin/mandarin_data/raw_data/all_mandarin_tokens.csv"
 
 if (file.exists(feather_path)) {
-  cat("EXISTING DATA FOUND\n")
+  cat("existing data found\n")
   cat(sprintf("Found existing data file: %s\n", feather_path))
   cat("Loading from saved feather file...\n\n")
 
   all_mandarin_tokens <- arrow::read_feather(feather_path)
 
 } else if (file.exists(csv_path)) {
-  cat("EXISTING CSV DATA FOUND\n")
+  cat("existing csv data found\n")
   cat(sprintf("Found existing data file: %s\n", csv_path))
   cat("Loading from CSV file...\n\n")
 
@@ -72,7 +72,7 @@ if (file.exists(feather_path)) {
   arrow::write_feather(all_mandarin_tokens, feather_path)
 
 } else {
-  cat("NO EXISTING DATA FOUND - DOWNLOADING FROM CHILDES\n")
+  cat("No existing data found - downloading from Childes\n")
 
   all_mandarin_tokens <- get_tokens(
     corpus = mandarin_corpora_names,
@@ -157,7 +157,7 @@ Here we group mothers and fathers together as "parents".
 
 ```{r}
 # Collapse mothers and fathers into parents
-mandarin_tokens$speaker[mandarin_tokens$speaker_role] <- "parent" #only mother and father
+mandarin_tokens$speaker <- "parent"
 mandarin_tokens$speaker[mandarin_tokens$speaker_role == "Target_Child"] <- "child"
 ```
 
@@ -285,20 +285,3 @@ mandarin_tokens$syncategory[mandarin_tokens$word_category == "nonfunction"] <- "
 write_feather(mandarin_tokens, "../mandarin/mandarin_data/processed_data/mandarin_tokens_processed.feather")
 ```
 
-
-```{r query}
-tokens <- read_feather("mandarin_tokens_processed.feather")
-
-child_haishi <- tokens %>%
-  filter(speaker_role == "Target_Child", gloss == "还是") %>%
-  select(target_child_name, target_child_age, utterance_id, transcript_id)
-
-# Then to see the surrounding utterance, group tokens by utterance_id
-child_haishi_utts <- tokens %>%
-  filter(utterance_id %in% child_haishi$utterance_id) %>%
-  arrange(utterance_id, token_order) %>%
-  group_by(utterance_id, speaker_role, target_child_age) %>%
-  summarise(utterance = paste(gloss, collapse = ""), .groups = "drop")
-
-print(child_haishi_utts, n = 30)
-```

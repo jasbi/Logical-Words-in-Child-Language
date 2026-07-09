@@ -5,15 +5,20 @@ date: "`r Sys.Date()`"
 output: pdf_document
 ---
 
+# Abstract
+
+
+
 # Setup
-Loads the libraries needed throughout.
+This section loads the R packages needed for data processing, modeling, and visualization. These libraries support reading the processed data file, working with tidy data, fitting Bayesian growth curve models, and arranging the final plots.
+
 ```{r packages, include=FALSE}
 library(tidyverse)
-library(arrow) # reading feather data file
-library(brms) # Bayesian regression models
-library(ggeffects) # with model predictions
+library(arrow) 
+library(brms)
+library(ggeffects) 
 library(ggrepel)
-library(grid) #  arranging multi-panel plot collages
+library(grid) 
 library(gridExtra)
 ```
 
@@ -22,7 +27,8 @@ knitr::opts_chunk$set(error = TRUE)
 ```
 
 # Load Data
-This section initializes the analytic pipeline by reading in a pre-processed corpus of Mandarin child-directed and child-produced tokens drawn from the CHILDES database. The purpose of this section is infrastructural: it ensures that the working dataset, organized at the token level by speaker, age, and lexical/grammatical features, is available for all subsequent frequency computations and growth-curve modeling. The directory-creation calls reflect a defensive coding practice intended to guarantee that downstream model artifacts and processed outputs can be written without runtime error.
+This section loads the processed Mandarin token data. The dataset is organized at the token level and includes information such as speaker, age, word form, and grammatical category. This dataset serves as the starting point for the frequency tables, plots, and growth curve models.
+
 ```{r processedMandarinTokens}
 # Create directories if they don't exist
 dir.create("../mandarin/mandarin_model/modeling", showWarnings = FALSE, recursive = TRUE)
@@ -33,23 +39,25 @@ mandarin_tokens_processed <- read_feather("../mandarin/mandarin_data/processed_d
 
 # Computing Cumulative Relative Frequencies
 
-Note: Unlike English, Mandarin does not have contractions. We work directly with `mandarin_tokens_processed`.
-
-This section is the quantitative foundation of the entire analysis. The goal is to characterize how often particular linguistic items, both broad syntactic categories (function vs. content words) and individual function words, occur in children's and caregivers' speech across developmental time. The cumulative formulation, in which numerator and denominator are summed over all preceding ages, is adopted to smooth out the considerable monthly noise inherent in naturalistic transcript data and to yield monotonically non-decreasing trajectories that are amenable to parametric growth-curve fitting. 
+This section computes cumulative relative frequencies for the Mandarin tokens. Because naturalistic child language data can be noisy from month to month, the analysis uses cumulative counts across age. This makes the developmental patterns smoother and easier to model. The resulting frequency tables provide the foundation for the later plots and growth curve analyses.
 
 ## Function vs. Content Words
 
-Here we compute cumulative relative frequencies of function vs. content words by grouping by "syntactic category":
-
-This block computes, separately for parents and children, the cumulative relative frequency of function words and content words as proportions of all tokens produced through each age. The aim is to quantify the developmental trajectory of broad syntactic category use, capturing the well-documented phenomenon by which the proportion of function words in children's productions rises gradually across early childhood as grammatical morphology and closed-class items emerge.
+This section calculates the cumulative relative frequency of function words and content words separately for children and caregivers. The goal is to examine how the proportion of function word use changes across age. This broad comparison gives an overall view of grammatical development before looking at individual function words in more detail.
 
 ```{r}
 syncategory_relfreq <-
   mandarin_tokens_processed %>%
   group_by(syncategory, speaker, age) %>%
-  summarise(freq = n()) %>%
-  mutate(freq = ifelse(age <= 12, 0, freq)) %>% 
-  mutate(total=sum(freq), relfreq=freq/sum(freq), pct=relfreq*100) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  complete( 
+    nesting(syncategory)  %>% mutate(speaker = "child"),
+    age = 0:10,
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(speaker == "child" & age <= 10, 0, freq)) %>%
+  group_by(speaker, age) %>%
+  mutate(total=sum(freq), relfreq = ifelse(total == 0, 0, freq / total), pct=relfreq*100) %>%
   group_by(syncategory, speaker) %>%
   arrange(age) %>%
   mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_pct=cumulative_relfreq*100)
@@ -59,54 +67,59 @@ saveRDS(syncategory_relfreq, "syncategory_relfreq.RDS")
 
 ## Individual Function Words
 
-Here we compute cumulative relative frequencies for individual function words by grouping by "word". 
+This section calculates cumulative relative frequencies for each individual function word. The data are grouped by word, speaker, and age, allowing us to trace how each function word changes over developmental time. These results are later used to fit word specific growth curves and estimate when each word begins to appear productively in child speech.
 
-This section disaggregates to the level of individual lexical items. The data are restricted to ages of ten months or older, reflecting the empirical observation that children produce essentially no recorded speech prior to that age. This object provides the raw material for fitting word-specific growth curves and estimating the age at which each individual function word enters productive use.
 ```{r}
 functionword_relfreq <-
   mandarin_tokens_processed %>%
   group_by(word, speaker, age) %>%
   summarise(freq = n(), .groups = "drop") %>%
-  mutate(freq = ifelse(age <= 12, 0, freq)) %>%   # zero numerator for early ages
+  complete(
+    nesting(word) %>% mutate(speaker = "child"), 
+    age = 0:10,
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(speaker == "child" & age <= 10, 0, freq)) %>% # zero numerator for early ages
   group_by(speaker, age) %>%
-  mutate(total=sum(freq), relfreq=freq/sum(freq), ppt=relfreq*1000) %>%
+  mutate(total=sum(freq), relfreq = ifelse(total == 0, 0, freq / total), ppt=relfreq*1000) %>%
   group_by(word, speaker) %>%
   arrange(age) %>%
-  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_ppt=cumulative_relfreq*1000)
+  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = ifelse(cum_total == 0, 0, cum_freq / cum_total), cumulative_ppt=cumulative_relfreq*1000)
 
 saveRDS(functionword_relfreq, "functionword_relfreq.RDS")
 ```
 
 ## Function Word Semantic Categories
 
-Here we compute cumulative relative frequencies by semantic categories. However, we have not planned any analyses of these yet.
-
-This block applies the same cumulative relative-frequency machinery at an intermediate level of granularity, grouping function words by semantic category (e.g., negation, conjunction).
+This section calculates cumulative relative frequencies by semantic category, such as negation, conjunction, disjunction, and conditionals. This provides an intermediate level of analysis between the broad function word category and individual lexical items.
 
 ```{r}
 wordcategory_relfreq <-
   mandarin_tokens_processed %>%
   group_by(word_category, speaker, age) %>%
-  summarise(freq = n()) %>%
-  mutate(freq = ifelse(age <= 12, 0, freq)) %>% 
+  summarise(freq = n(), .groups = "drop") %>%
+  complete(
+    nesting(word_category)  %>% mutate(speaker = "child"),
+    age = 0:10,
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(speaker == "child" & age <= 10, 0, freq)) %>% 
   group_by(speaker, age) %>%
-  mutate(total=sum(freq), relfreq=freq/sum(freq), ppt=relfreq*1000) %>%
+  mutate(total=sum(freq), relfreq = ifelse(total == 0, 0, freq / total), ppt=relfreq*1000) %>%
   group_by(word_category, speaker) %>%
   arrange(age) %>%
-  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total))
+  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = ifelse(cum_total == 0, 0, cum_freq / cum_total))
 
 saveRDS(wordcategory_relfreq, "wordcategory_relfreq.RDS")
 ```
 
 # Plots and Growth Curves
 
-This section moves from descriptive frequency computation to inferential modeling. The unifying goal is to fit a parametric developmental trajectory to each frequency time series, thereby summarizing each curve in terms of a small number of psychologically interpretable parameters.
+This section moves from descriptive frequency calculations to growth curve modeling. The goal is to summarize each developmental trajectory with a small set of interpretable model parameters. The plots show the observed frequency patterns across age, while the fitted curves estimate the underlying developmental trend.
 
 ## Content vs. Function Word Production
 
-The graph below shows percent word category (content vs. function word) in each monthly bin during the development of the child for parents and children.
-
-This subsection applies the modeling framework to the aggregate function-word percentage in child speech.  The plotting code first visualizes the raw percent-function-word trajectory, faceted by speaker so that adult input and child production can be inspected side by side. The Bayesian model is then fit to the child data alone, with uniform priors placed on the upper asymptote, the growth rate, and the lag. Posterior fitted values are then merged with the observed data and overlaid as a fitted curve, providing a visual diagnostic of model fit. The purpose of beginning with the aggregate function-word category, rather than with individual words, is to establish a benchmark trajectory against which the developmental timing of specific function words can be compared.
+This section visualizes the overall percentage of function word use across age for both children and caregivers. It then fits a Bayesian growth curve model to the child function word trajectory. The fitted curve is plotted together with the observed data, allowing us to evaluate how well the model captures the developmental increase in function word production.
 
 ```{r}
 function_words_plot <-
@@ -132,7 +145,7 @@ function_words_lagModel <- brm(
   prior = c(
     prior(uniform(0, 100), nlpar = "upperAsymptote", lb = 0, ub = 100),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 0, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/mandarin_function_word_lagModel",
   iter = 10000)
@@ -164,21 +177,20 @@ function_words_plot <-
     legend.title = element_text(size = 14),
     legend.text  = element_text(size = 12)
   )
-function_words_plot
 ```
 
 
 ## Distribution of Individual Function Words
 
-This is the analytic heart of the document. For each individual function word of theoretical interest, an essentially identical four-step procedure is executed: 
-(i) plot the raw cumulative parts-per-thousand trajectory, faceted by speaker 
-(ii) fit the Gompertz lag-curve model to the child trajectory under uniformly-distributed priors whose upper bounds on the asymptote are tailored to the empirical magnitude of the word in question
-(iii) extract posterior fitted values, attach them to the observed data, and produce an overlay plot
-(iv) append the posterior estimate, standard error, and 95 percent credible interval for the lag parameter to a cumulative age_of_production table. The function words analyzed are organized into theoretically motivated subcategories.
+This section applies the same modeling procedure to each individual function word. For each word, the code first plots the observed cumulative frequency trajectory, then fits a Bayesian growth curve model to the child data, extracts the fitted values, and creates an overlay plot comparing the observed and fitted values. The estimated lag parameter is also saved as an estimate of the word’s age of production. The words are organized by semantic category to make the developmental patterns easier to compare.
 
 ### Negation
 
+This section analyzes Mandarin negation words, including 不bù, 没méi, 没有méiyǒu, and 别bié. For each word, the code plots its cumulative frequency over age, fits a growth curve to the child production data, and extracts the estimated age of production. These words allow us to compare different types of negation, such as general negation, negation of possession or completion, and prohibitive negation.
+
 ##### 不 bù (general negation)
+
+This subsection analyzes the developmental trajectory of 不 bù, a general negation marker in Mandarin. It is commonly used to negate actions, states, or qualities, similar to “not” in English. The code visualizes its cumulative use across age, fits the growth curve model, and adds the estimated age of production to the summary table.
 
 ```{r bu_plot, echo=FALSE}
 functionword_relfreq %>%
@@ -191,9 +203,6 @@ functionword_relfreq %>%
   xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
 ```
 
-Fitting the the data to the Bayesian growth curve. 
-
-Children do not say anything for the first 10 monthes
 
 ```{r bu_growth_model, include=FALSE}
 bu_lagModel <- brm(
@@ -206,7 +215,7 @@ bu_lagModel <- brm(
   prior = c(
     prior(uniform(0, 40), nlpar = "upperAsymptote", lb = 0, ub = 40),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/bu_lagModel",
   iter = 10000)
@@ -252,6 +261,8 @@ bu_plot <-
 
 ##### 没 méi (negation of have/completion)
 
+This subsection analyzes the developmental trajectory of 没 méi, a negation word often used to express “not have,” “there is not,” or that an action has not occurred. The code plots its cumulative frequency, fits the growth curve model, and adds its estimated age of production to the summary table.
+
 ```{r mei_plot, echo=FALSE}
 functionword_relfreq %>%
   filter(word=="没") %>%
@@ -274,7 +285,7 @@ mei_lagModel <- brm(
   prior = c(
     prior(uniform(0, 20), nlpar = "upperAsymptote", lb = 0, ub = 20),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/mei_lagModel",
   iter = 10000)
@@ -322,6 +333,8 @@ age_of_production <- bind_rows(
 
 ##### 没有 méiyǒu (negation of have/completion)
 
+This subsection analyzes 没有 méiyǒu, a fuller negation form meaning “do not have” or “have not.” It is commonly used to negate possession, existence, or completed actions. The code follows the same procedure by plotting the observed developmental pattern, fitting the growth curve, saving predictions, and recording the estimated age of production.
+
 ```{r meiyou_plot, echo=FALSE}
 functionword_relfreq %>%
   filter(word=="没有") %>%
@@ -344,7 +357,7 @@ meiyou_lagModel <- brm(
   prior = c(
     prior(uniform(0, 20), nlpar = "upperAsymptote", lb = 0, ub = 20),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/meiyou_lagModel",
   iter = 10000)
@@ -392,6 +405,8 @@ age_of_production <- bind_rows(
 
 ##### 别 bié (prohibitive negation / "don't")
 
+This subsection analyzes 别 bié, a prohibitive negation marker meaning “do not” or “don’t.” It is usually used to tell someone not to do something. The code estimates how this word appears over developmental time and adds its model-based age of production to the larger comparison table.
+
 ```{r bie_plot, echo=FALSE}
 functionword_relfreq %>%
   filter(word=="别") %>%
@@ -414,7 +429,7 @@ bie_lagModel <- brm(
   prior = c(
     prior(uniform(0, 10), nlpar = "upperAsymptote", lb = 0, ub = 10),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/bie_lagModel",
   iter = 10000)
@@ -462,7 +477,11 @@ age_of_production <- bind_rows(
 
 ### Conjunction
 
+This section analyzes Mandarin conjunction words, including 和hé, 跟gēn, and 而且érqiě. These words are used to connect nouns, phrases, or clauses. For each word, the code plots the cumulative developmental trajectory, fits a growth curve to child production, and saves the estimated age of production.
+
 ##### 和 hé
+
+This subsection analyzes 和 hé, a common Mandarin conjunction meaning “and.” It is mainly used to connect nouns, people, or noun phrases. The code visualizes its cumulative frequency across age, fits the growth curve model, and adds the estimated age of production to the summary table.
 
 ```{r he_plot, echo=FALSE}
 functionword_relfreq %>%
@@ -486,7 +505,7 @@ he_lagModel <- brm(
   prior = c(
     prior(uniform(0, 10), nlpar = "upperAsymptote", lb = 0, ub = 10),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/he_lagModel",
   iter = 10000)
@@ -534,6 +553,8 @@ age_of_production <- bind_rows(
 
 ##### 跟 gēn
 
+This subsection analyzes 跟 gēn, which can mean “with” or function as a conjunction meaning “and” in some contexts. In this analysis, it is treated as a conjunction when it connects noun-like elements. The code plots its cumulative use, fits the child growth curve, saves predicted values, and records the estimated age of production.
+
 ```{r gen_plot, echo=FALSE}
 functionword_relfreq %>%
   filter(word=="跟") %>%
@@ -556,7 +577,7 @@ gen_lagModel <- brm(
   prior = c(
     prior(uniform(0, 10), nlpar = "upperAsymptote", lb = 0, ub = 10),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/gen_lagModel",
   iter = 10000)
@@ -605,6 +626,10 @@ age_of_production <- bind_rows(
 
 ##### 而且 érqiě ("and also/moreover")
 
+##not enough data
+
+This subsection analyzes 而且 érqiě, a conjunction meaning “and also,” “moreover,” or “in addition.” It is often used to connect clauses or add extra information. Because this is a more complex connective, the model helps estimate when it begins to emerge in child speech relative to simpler conjunctions.
+
 ```{r erqie_plot, echo=FALSE}
 functionword_relfreq %>%
   filter(word=="而且") %>%
@@ -627,7 +652,7 @@ erqie_lagModel <- brm(
   prior = c(
     prior(uniform(0, 5), nlpar = "upperAsymptote", lb = 0, ub = 5),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/erqie_lagModel",
   iter = 10000)
@@ -676,7 +701,14 @@ age_of_production <- bind_rows(
 
 ### Disjunction
 
+This section analyzes Mandarin disjunction words, including 或者huòzhě and 还是háishi. These words express alternatives, but they are used in different contexts. The code compares their developmental trajectories by plotting cumulative frequency, fitting growth curves, and estimating age of production.
+
 ##### 或者 huòzhě
+
+This subsection analyzes 或者 huòzhě, a Mandarin disjunction marker meaning “or.” It is usually used to present alternatives in statements or choices. The code visualizes its cumulative use, fits a growth curve to the child data, and records its estimated age of production.
+
+Example:
+
 
 ```{r huozhe_plot, echo=FALSE}
 functionword_relfreq %>%
@@ -700,7 +732,7 @@ huozhe_lagModel <- brm(
   prior = c(
     prior(uniform(0, 2), nlpar = "upperAsymptote", lb = 0, ub = 2),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/huozhe_lagModel",
   iter = 10000)
@@ -748,6 +780,12 @@ age_of_production <- bind_rows(
 
 ##### 还是 háishi ("or" in questions)
 
+This subsection analyzes 还是 háishi, a disjunction word meaning “or,” especially in questions. It is commonly used when asking someone to choose between alternatives. The code estimates its developmental trajectory and allows comparison with 或者, which is used in a different disjunctive context.
+
+example:
+是开心还是害怕?
+Is (he/she) happy or scared?
+
 ```{r haishi_plot, echo=FALSE}
 functionword_relfreq %>%
   filter(word=="还是") %>%
@@ -770,7 +808,7 @@ haishi_lagModel <- brm(
   prior = c(
     prior(uniform(0, 5), nlpar = "upperAsymptote", lb = 0, ub = 5),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/haishi_lagModel",
   iter = 10000)
@@ -818,7 +856,16 @@ age_of_production <- bind_rows(
 
 ### Conditionals
 
+This section analyzes Mandarin conditional expressions, including 如果rúguǒ, 要是yàoshi, and 的话dehuà. These words and phrases are related to conditional meaning, such as “if” or “if that is the case.” The code plots each word’s developmental trajectory, fits a growth curve model, and estimates when each form enters productive child speech.
+
 ##### 如果 rúguǒ
+
+This subsection analyzes 如果 rúguǒ, a conditional marker meaning “if.” It is often used to introduce a hypothetical condition or situation. Because this word appears later and less frequently, the model is fit to child data from later ages. The code plots the observed pattern, fits the growth curve, and records the estimated age of production.
+
+example:
+
+如果下雨天……
+If (it’s) a rainy day …
 
 ```{r ruguo_plot, echo=FALSE}
 functionword_relfreq %>%
@@ -838,11 +885,11 @@ ruguo_lagModel <- brm(
      growthRate ~ 1,
      lag ~ 1,
      nl = TRUE),
-  data = filter(functionword_relfreq, word=="如果", speaker=="child", age >= 24),
+  data = filter(functionword_relfreq, word=="如果", speaker=="child"),
   prior = c(
     prior(uniform(0, 2), nlpar = "upperAsymptote", lb = 0, ub = 2),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/ruguo_lagModel",
   iter = 10000)
@@ -851,7 +898,7 @@ ruguo_lagModel <- brm(
 ```{r ruguo_predictions}
 ruguo_predictions <- as.data.frame(fitted(ruguo_lagModel))
 
-ruguo_childdata <- filter(functionword_relfreq, word=="如果", speaker=="child",age >= 24)
+ruguo_childdata <- filter(functionword_relfreq, word=="如果", speaker=="child")
 ruguo_childdata$predictions <- ruguo_predictions[, "Estimate"]
 
 saveRDS(ruguo_childdata, "../mandarin/mandarin_data/processed_data/ruguo_childdata.RDS")
@@ -888,15 +935,14 @@ age_of_production <- bind_rows(
 )
 ```
 
-```{r}
-functionword_relfreq %>%
-  filter(word == "如果", speaker == "child") %>%
-  arrange(age) %>%
-  select(age, freq, total, cum_freq, cum_total, cumulative_ppt)
-
-```
-
 ##### 要是 yàoshi (colloquial "if")
+
+This subsection analyzes 要是 yàoshi, a more colloquial conditional marker also meaning “if.” It is used to introduce a possible or imagined condition, often in everyday speech. The code estimates its developmental trajectory and compares its emergence with other conditional forms.
+
+example:
+所以要是有别人在……
+So if there are other people around …
+
 
 ```{r yaoshi_plot, echo=FALSE}
 functionword_relfreq %>%
@@ -920,7 +966,7 @@ yaoshi_lagModel <- brm(
   prior = c(
     prior(uniform(0, 2), nlpar = "upperAsymptote", lb = 0, ub = 2),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/yaoshi_lagModel",
   iter = 10000)
@@ -969,6 +1015,13 @@ age_of_production <- bind_rows(
 
 ##### 的话 dehuà
 
+This subsection analyzes 的话 dehuà, a conditional phrase often used at the end of a clause, roughly meaning “if that is the case” or “if.” It usually works together with a condition stated earlier in the sentence. The code plots its cumulative frequency, fits the growth curve model, and adds its estimated age of production to the summary table.
+
+example:
+木头的话它……
+If it’s wood, it (would) …
+
+
 ```{r dehua_plot, echo=FALSE}
 functionword_relfreq %>%
   filter(word=="的话") %>%
@@ -991,7 +1044,7 @@ dehua_lagModel <- brm(
   prior = c(
     prior(uniform(0, 2), nlpar = "upperAsymptote", lb = 0, ub = 2),
     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
   ),
   file = "../mandarin/mandarin_model/modeling/dehua_lagModel",
   iter = 10000)

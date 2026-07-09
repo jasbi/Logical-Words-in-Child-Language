@@ -1,0 +1,261 @@
+---
+title: "Extracting Function Words of Interest from Childes - Japanese"
+author: "Samantha Bai"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(childesr)
+library(tidyverse)
+library(arrow)
+library(stringr)
+library(dplyr)
+library(knitr)
+```
+
+# Loading Data from Childes-DB
+
+We use the package `childesr` to access the data in the CHILDES database. The
+code below downloads and stores all utterances by children and parents from the
+Japanese collection.
+
+> **Encoding note.** Some CHILDES Japanese corpora transcribe `gloss` in
+> romaji (e.g. `nai`, `iya`, `chigau`) rather than Japanese script. Because the
+> negator list below is written in Japanese characters (as requested), run the
+> diagnostic in the *Inspecting glosses* section first: if the candidate
+> negators return zero counts, your corpus is romanized and the candidate list
+> needs the romaji forms instead. Everything else in the pipeline is unaffected.
+
+```{r japanese_collection}
+target_collection <- "Japanese"
+```
+
+```{r directories}
+# Create directories
+dir.create("../japanese/japanese_data/raw_data", showWarnings = FALSE, recursive = TRUE)
+dir.create("../japanese/japanese_data/processed_data", showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r ChildesDBimports}
+# Define file paths
+feather_path <- "../japanese/japanese_data/raw_data/all_japanese_tokens.feather"
+csv_path <- "../japanese/japanese_data/raw_data/all_japanese_tokens.csv"
+
+if (file.exists(feather_path)) {
+  cat("existing data found\n")
+  cat(sprintf("Found existing data file: %s\n", feather_path))
+  cat("Loading from saved feather file...\n\n")
+
+  all_japanese_tokens <- arrow::read_feather(feather_path)
+
+} else if (file.exists(csv_path)) {
+  cat("existing csv data found\n")
+  cat(sprintf("Found existing data file: %s\n", csv_path))
+  cat("Loading from CSV file...\n\n")
+
+  all_japanese_tokens <- readr::read_csv(csv_path, show_col_types = FALSE)
+
+  cat("Saving feather version for faster future loading...\n")
+  arrow::write_feather(all_japanese_tokens, feather_path)
+
+} else {
+  cat("No existing data found - downloading from Childes\n")
+
+  all_japanese_tokens <- get_tokens(
+    collection = target_collection,
+    role = c("Target_Child", "Mother", "Father"),
+    token = "*"
+  )
+
+  cat("Saving downloaded data...\n")
+  arrow::write_feather(all_japanese_tokens, feather_path)
+  readr::write_csv(all_japanese_tokens, csv_path)
+}
+
+cat(sprintf("Loaded %d tokens from %d children\n",
+            nrow(all_japanese_tokens),
+            dplyr::n_distinct(all_japanese_tokens$target_child_id)))
+```
+
+# Token Processing
+
+## Exclusions
+
+The following script cleans up the data. Like Mandarin, Japanese has no case
+distinction, so no lowercase conversion is needed. We exclude tokens with
+missing age and those above 72 months of the child's age. All exclusions are
+stored in a file called exclusions_japanese_summary.csv
+
+```{r exclusionsTokens}
+# No lowercase conversion needed for Japanese
+
+# Count tokens before exclusions
+n_tokens_before_exclusions <- nrow(all_japanese_tokens)
+
+# Number of children before exclusions
+n_chi_before_exclusions <-
+  all_japanese_tokens$target_child_id %>% unique() %>% length()
+
+japanese_tokens <- all_japanese_tokens
+
+# Removing rows for which age information for the child does not exist
+japanese_tokens <-
+  japanese_tokens %>% drop_na(target_child_age)
+
+# Count the tokens after removing NA tokens
+n_tokens_ageNAs_removed <- nrow(japanese_tokens)
+
+# Number of children after excluding NAs
+n_chi_ageNAs_removed <-
+  japanese_tokens$target_child_id %>% unique() %>% length()
+
+# Take out data for the age range above 6 years (72 months)
+japanese_tokens <-
+  japanese_tokens %>%
+  filter(target_child_age < 72)
+
+# Count the tokens after excluding older than 6 age range
+n_tokens_ageOver72mo_removed <- nrow(japanese_tokens)
+
+# Number of children left after exclusions
+n_chi_ageOver72mo_removed <-
+  japanese_tokens$target_child_id %>% unique() %>% length()
+
+# Record the dataframe of exclusions
+exclusions <-
+  data.frame(
+    n_tokens_before_exclusions = n_tokens_before_exclusions,
+    n_after_ageNAs = n_tokens_ageNAs_removed,
+    n_after_age72mo = n_tokens_ageOver72mo_removed,
+    missing_age = n_tokens_before_exclusions - n_tokens_ageNAs_removed,
+    Over72mo = n_tokens_ageNAs_removed - n_tokens_ageOver72mo_removed,
+    n_chi_total = n_chi_before_exclusions,
+    n_chi_ageNAs = n_chi_ageNAs_removed,
+    n_chi_age72over = n_chi_ageOver72mo_removed
+  )
+```
+
+```{r savingData}
+# Save the exclusion data in a file as well as the final data
+write_csv(exclusions, "../japanese/japanese_data/raw_data/exclusions_japanese_summary.csv")
+write_csv(japanese_tokens, "../japanese/japanese_data/raw_data/japanese_tokens_excluded.csv")
+```
+
+## Coding Speaker Roles
+
+Here we group mothers and fathers together as "parents".
+
+```{r}
+# Collapse mothers and fathers into parents
+japanese_tokens$speaker <- "parent"
+japanese_tokens$speaker[japanese_tokens$speaker_role == "Target_Child"] <- "child"
+```
+
+## Coding Age
+
+Here we bin the age data per month.
+
+```{r age}
+japanese_tokens$age <- japanese_tokens$target_child_age %>% floor()
+```
+
+## Grouping Utterance Types
+
+Grouping utterances as declarative, imperative, interrogative, and other.
+
+```{r utterance_types}
+# Prepare the utterance_type categories for this study based on the utterance_types in childes-db
+## Categories: declarative, imperative, interrogative, and other
+japanese_tokens$utterance_type <-
+  recode(japanese_tokens$utterance_type,
+         question = "interrogative",
+         `broken for coding` = "other",
+         `imperative_emphatic` = "imperative",
+         interruption = "other",
+         `interruption question` = "interrogative",
+         `missing CA terminator` = "other",
+         `no break TCU continuation` = "other",
+         `question exclamation` = "interrogative",
+         `quotation next line` = "other",
+         `quotation precedes` = "other",
+         `self interruption` = "other",
+         `self interruption question` = "interrogative",
+         `trail off` = "other",
+         `trail off question` = "interrogative"
+  )
+```
+
+# Defining Negation Words in Japanese
+
+This analysis focuses only on the **negation** category. Japanese negation is
+largely morphological (the suffix ない / ぬ / ません attaches to verbs and
+adjectives), so a gloss-level match mostly captures **standalone** negators,
+refusals, and predicate ない. We start from a candidate set written in Japanese
+characters, then keep the **top 5 most frequent** in the corpus.
+
+Candidate negators considered (Japanese script):
+
+* ない — "not / there isn't" (predicate negation)
+* いいえ — "no" (formal)
+* ううん — "no" (informal)
+* いけない — "must not"
+
+## Inspecting glosses (encoding check)
+
+```{r inspect_glosses}
+# If your corpus is romanized, the Japanese-script candidates will not match.
+# This prints the 30 most frequent glosses so you can confirm the script in use.
+japanese_tokens %>%
+  count(gloss, sort = TRUE) %>%
+  slice_head(n = 30) %>%
+  knitr::kable(caption = "30 most frequent glosses (script sanity check)")
+```
+
+## Selecting the Top 5 Negation Words
+
+We count how often each candidate negator occurs in the cleaned token table and
+keep the five most frequent. The frequency table is printed so the selection is
+transparent.
+
+```{r negation}
+# Candidate negators in Japanese characters (hiragana / katakana / kanji)
+negation_candidates <- c(
+  "nai",        # ない
+  "iya",        # いや / イヤ
+  "janai"      # じゃない
+)
+
+negation_candidates
+```
+
+## Marking Negation Words
+
+First we mark all words as "nonfunction", then label the negation words:
+
+```{r FunctionWords}
+for (x in negation_candidates) {
+  japanese_tokens$word[japanese_tokens$gloss == x] <- x
+}
+```
+
+## Word Categories
+
+```{r wordcategories}
+japanese_tokens$word_category <- "nonfunction"
+japanese_tokens$word_category[japanese_tokens$word %in% negation_candidates] <- "Negation"
+```
+
+Mark function vs. nonfunction:
+
+```{r syncategory}
+japanese_tokens$syncategory <- "Function"
+japanese_tokens$syncategory[japanese_tokens$word_category == "nonfunction"] <- "nonfunction"
+```
+
+## Saving Summary Tables
+
+```{r save_dataframe}
+write_feather(japanese_tokens, "../japanese/japanese_data/processed_data/japanese_tokens_processed.feather")
+```

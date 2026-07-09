@@ -1,0 +1,123 @@
+---
+fontsize: 11pt
+title: ""
+# bibliography: ../negation_production_references.bib
+output: 
+  pdf_document:
+    extra_dependencies: ["float"]
+---
+
+\begin{center} \textbf{Population-level Corpus-Derived Age-of-Acquisition Estimates for Negative Morphemes in Six Languages} \end{center}
+
+<!-- This gets rid of page numbers -->
+\pagenumbering{gobble}
+
+```{r packages, echo=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(ggthemes)
+library(gridExtra)
+library(grid)
+library(png)
+library(ggplot2)
+library(dplyr)
+library(forcats)
+library(patchwork)
+library(stringi)
+#library(wordcountaddin)
+knitr::opts_chunk$set(dev = "ragg_png", dpi = 300)
+```
+
+**Overview** -- Children begin acquiring negative morphemes like *no* early, though exactly when remains contested. Recent experimental evidence suggests that 18-to–24-month-olds can already understand negative sentences in English (de Carvalho, & Dautriche, 2025), French (de Carvalho et al., 2020), and Hungarian (Szabó & Kovács, 2025); yet other studies have failed to find such comprehension abilities in the same age range, or even in older children (Austin et al., 2014; Feiman et al., 2017; Nordmeyer & Frank, 2014; Reuter et al., 2018), suggesting possible experimental task effects. Children's early production of negative morphemes has been documented across languages and corpora (Bloom, 1970; Choi, 1988; Pea, 1980; Cameron-Faulkner et al., 2007; Jasbi et al., 2020; inter alia), but no systematic method exists for estimating the population-level age at which children begin producing negative morphemes using corpus data. We address this gap by applying Bayesian growth-curve modeling to child language corpora, developing a novel approach to estimating population-level age of acquisition for negative morphemes. Our results show that across six languages (English, Spanish, French, Mandarin Chinese, German, and Japanese), children begin producing a wide variety of negative morphemes between 12 and 24 months. Together with the experimental evidence cited above, these results provide converging support for the view that negation emerges in both comprehension and production within children's second year of life.
+
+```{r exclusions, include=FALSE, eval=FALSE}
+#exclusions <- read_csv("../raw_data/token_exclusions.csv")
+```
+
+**Methods** -- We used word tokens from the English (North America and UK), German, Spanish, Japanese, Mandarin, and French collections of the CHILDES corpora (MacWhinney 2000), accessed via childes-db.stanford.edu and its associated R package {childesr} (Sanchez et al. 2019), retaining children between 10 and 72 months of age. The final dataset contained 15,824,850 tokens from 1,146 English children, 2,974,755 tokens from 135 Japanese children, 2,380,950 tokens from 379 French children, 1,358,536 tokens from 894 Mandarin children, 1,344,187 tokens from 354 Spanish children, and 4,157,857 tokens from 117 German children.
+We selected negation words serving comparable linguistic functions across languages, distinguishing discourse negation (no in Spanish and English, nein in German, nai and iya in Japanese, non and ne in French) from sentential negation (not and n't in English, nicht and kein in German, bù, méi, méiyǒu, and bié in Mandarin, janai in Japanese, pas and n' in French). Cumulative relative frequency was computed for each negation word by dividing its running frequency by the total words produced up to that month. Gompertz growth curves were then fitted to each word's trajectory, with the lambda parameter indexing age of onset.
+
+
+
+**Results** -- Figure 1 shows the cumulative relative frequency of X negative morphemes by children's age (months) in English, French, German, Mandarin Chinese, Spanish, and Japanese. For most negative morphemes, cumulative relative frequencies follow a nonlinear S curve across development with a period of accelerated growth, a period of slowdown, and a final stage of stable production. We fit separate Bayesian growth curve models to the cumulative relative frequency of each function word using the BRMS package (Bürkner 2017). We used growth curves with three parameters: 1. Lambda (lag): estimating the age at which production starts; 2. Miu: maximum rate of growth; and 3. A: maximum growth (Figure 2, right). Uniform priors were chosen for all three parameters. Figure 2 (Left) shows the onset of production estimates for all negative morphemes in our study.  ($\beta=$ = , $t=$ = , $p=$ = ).
+
+\footnotesize
+\hfill Word Count: 497
+
+**References** --Austin, K., Theakston, A., Lieven, E., & Tomasello, M. (2014). *Developmental Psychology*, 50(8), 2061–2070. -- Bloom, L. (1970). *Language development*. Cambridge, MA: MIT Press. --Bürkner, P.-C. (2017). *Journal of Statistical Software*. -- Cameron-Faulkner, T., Lieven, E., & Theakston, A. (2007). *Journal of Child Language* -- Choi, S. (1988). *Journal of Child Language*. -- de Carvalho, A., Crimon, C., Barrault, A., Trueswell, J., & Christophe, A. (2021). *Developmental Science*. -- de Carvalho, A., & Dautriche, I. (2025). *Cognition*. -- Feiman, R., Mody, S., Sanborn, S., & Carey, S. (2017). *Language Learning and Development*. Jasbi, M., McDermott-Hinman, A., Davidson, K., & Carey, S. (2020). *BUCLD45 Proceedings*. -- MacWhinney, Brian (2000) The CHILDES Project: The Database -- Nordmeyer, A. E., & Frank, M. C. (2014). *Journal of Memory and Language*. -- Pea, R. D. (1980). The development of negation in early child language. In D. R. Olson (Ed.), The social foundations of language and thought: Essays in honor of Jerome S. Bruner (pp. 156–186). New York, NY: W. W. Norton. -- Reuter, T., Feiman, R., & Snedeker, J. (2018). *Child Development*. -- Sanchez, Alessandro, Stephan Meylan, Mika Braginsky, Kyle MacDonald, Daniel Yurovsky, and Michael C Frank (2019). *Behavior Research Methods*. -- Szabó, E., Kovács, A., (2025) *Cognition*.
+
+```{r bothPlotsOnePage, warning=FALSE, message=FALSE, echo=FALSE, fig.width=8.5, fig.height=11, out.width="100%", fig.align="center", fig.env="figure*"}
+# --- Figure 1: Growth curves ---
+combined_negation_plot <- readRDS(
+  "../summary/combined_outputs/negation_growth_curves_one_plot.rds"
+)
+combined_negation_plot <- combined_negation_plot &
+  theme(
+    plot.title    = element_text(size = 14),
+    plot.subtitle = element_text(size = 9),
+    axis.title    = element_text(size = 12),
+    axis.text     = element_text(size = 9),
+    plot.margin   = margin(4, 36, 4, 4)
+  )
+
+# --- Figure 2: Age of production ---
+age_of_production_plot <- readRDS("../summary/combined_negation_age_of_production.RDS") %>%
+  mutate(
+    word = word %>%
+      str_remove_all("[\u4e00-\u9fff]") %>%
+      str_squish() %>%
+      stri_trans_nfc()
+  ) %>%
+  mutate(
+    plot_id = paste(word, language, sep = "___"),
+    plot_id = fct_reorder(plot_id, Estimate)
+  )
+
+age_plot <- ggplot(age_of_production_plot,
+                   aes(x = plot_id, y = Estimate, color = language)) +
+  geom_point(size = 1.7) +
+  geom_errorbar(aes(ymin = Q2.5, ymax = Q97.5), width = 0.15, linewidth = 0.35) +
+  coord_flip() +
+  scale_x_discrete(labels = setNames(age_of_production_plot$word,
+                                     age_of_production_plot$plot_id)) +
+  labs(x = "Negation word", y = "Estimated age of production", color = "Language") +
+  theme_bw(base_size = 7) +
+  theme(
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 11),
+    legend.position = "bottom",
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 11),
+    legend.key.size = unit(0.25, "cm")
+  )
+```
+
+```{r}
+#| label: fig-growth
+#| echo: false
+#| warning: false
+#| message: false
+#| fig.pos: "H"
+#| fig.width: 8
+#| fig.height: 5
+#| out.width: "100%"
+#| fig.align: "center"
+#| fig.cap: "Cumulative relative frequency (words per thousand) for the negation words in children's productions."
+combined_negation_plot
+```
+
+```{r}
+#| label: fig-onset
+#| echo: false
+#| warning: false
+#| message: false
+#| fig.pos: "H"
+#| fig.width: 8
+#| fig.height: 3
+#| out.width: "100%"
+#| fig.align: "center"
+#| fig.cap: "Estimated onset of production (lag value $\\lambda$) for negation words in the study."
+age_plot
+```
+
+
+

@@ -1,0 +1,261 @@
+---
+title: "French Negation Plots and Curves"
+author: "Samantha Bai"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+
+# Setup
+This section loads the R packages needed for data processing, modeling, and visualization. These libraries support reading the processed data file, working with tidy data, fitting Bayesian growth curve models, and arranging the final plots.
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(arrow)
+library(brms)
+library(ggeffects)
+library(ggrepel)
+library(grid)
+library(gridExtra)
+```
+
+```{r}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+# Load Data
+This section loads the processed French token data produced by the extraction pipeline. The dataset is organized at the token level and includes speaker, age, word form (`word`), and grammatical category (`word_category`, `syncategory`). The negation words present are the five most frequent French negators selected in the extraction file.
+
+```{r processedFrenchTokens}
+# Create directories if they don't exist
+dir.create("../french/french_model/modeling", showWarnings = FALSE, recursive = TRUE)
+dir.create("../french/french_data/processed_data", showWarnings = FALSE, recursive = TRUE)
+
+french_tokens_processed <- read_feather("../french/french_data/processed_data/french_tokens_processed.feather")
+```
+
+# Computing Cumulative Relative Frequencies
+
+This section computes cumulative relative frequencies for the French tokens. Because naturalistic child language data can be noisy from month to month, the analysis uses cumulative counts across age, which smooths the developmental patterns and makes them easier to model.
+
+## Individual Negation Words
+
+This section calculates cumulative relative frequencies for each individual negation word. The data are grouped by word, speaker, and age, allowing us to trace how each negator changes over developmental time. These results feed the word-specific growth curves.
+
+```{r functionword_relfreq}
+functionword_relfreq <-
+  french_tokens_processed %>%
+  group_by(word, speaker, age) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  complete(
+    nesting(word) %>% mutate(speaker = "child"),
+    age = 0:10,
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(speaker == "child" & age <= 10, 0, freq)) %>% # zero numerator for early ages
+  group_by(speaker, age) %>%
+  mutate(total = sum(freq),
+         relfreq = ifelse(total == 0, 0, freq / total),
+         ppt = relfreq * 1000) %>%
+  group_by(word, speaker) %>%
+  arrange(age) %>%
+  mutate(cum_freq = cumsum(freq),
+         cum_total = cumsum(total),
+         cumulative_relfreq = ifelse(cum_total == 0, 0, cum_freq / cum_total),
+         cumulative_ppt = cumulative_relfreq * 1000)
+
+saveRDS(functionword_relfreq, "french_functionword_relfreq.RDS")
+```
+
+## Negation Category
+
+This section calculates cumulative relative frequency for the negation category as a whole (all top-5 negators pooled). This gives a category-level view before drilling into individual lexical items.
+
+```{r wordcategory_relfreq}
+wordcategory_relfreq <-
+  french_tokens_processed %>%
+  group_by(word_category, speaker, age) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  complete(
+    nesting(word_category) %>% mutate(speaker = "child"),
+    age = 0:10,
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(speaker == "child" & age <= 10, 0, freq)) %>%
+  group_by(speaker, age) %>%
+  mutate(total = sum(freq),
+         relfreq = ifelse(total == 0, 0, freq / total),
+         ppt = relfreq * 1000) %>%
+  group_by(word_category, speaker) %>%
+  arrange(age) %>%
+  mutate(cum_freq = cumsum(freq),
+         cum_total = cumsum(total),
+         cumulative_relfreq = ifelse(cum_total == 0, 0, cum_freq / cum_total),
+         cumulative_ppt = cumulative_relfreq * 1000)
+
+saveRDS(wordcategory_relfreq, "french_wordcategory_relfreq.RDS")
+```
+
+# Plots and Growth Curves
+
+This section moves from descriptive frequency calculations to growth curve modeling. The goal is to summarize each developmental trajectory with a small set of interpretable parameters. The plots show the observed frequency across age, while the fitted curves estimate the underlying developmental trend.
+
+We define one helper, `fit_gompertz()`, that reproduces the Mandarin per-word procedure: it fits the Bayesian Gompertz lag model to the child data, extracts the fitted values, builds the observed-vs-fitted overlay plot, and records the estimated age of production (the `lag` parameter). It is reused for the negation category and for each individual negator so the model, priors, and styling stay identical across all of them.
+
+```{r fit_helper}
+fit_gompertz <- function(d, title, model_path, rds_path) {
+  d <- dplyr::arrange(d, age)
+
+  # Data-driven upper bound for the asymptote prior (Mandarin tuned this per word
+  # by hand; here we scale it to the observed maximum so frequent and rare
+  # negators are both handled sensibly).
+  ua_ub <- max(5, ceiling(max(d$cumulative_ppt, na.rm = TRUE) * 2))
+
+  m <- brm(
+    bf(cumulative_ppt ~ upperAsymptote * exp(-exp(((growthRate * exp(1)) / upperAsymptote) * (lag - age) + 1)),
+       upperAsymptote ~ 1,
+       growthRate ~ 1,
+       lag ~ 1,
+       nl = TRUE),
+    data = d,
+    prior = c(
+      prior_string(paste0("uniform(0, ", ua_ub, ")"),
+                   nlpar = "upperAsymptote", lb = 0, ub = ua_ub),
+      prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+      prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+    ),
+    file = model_path,
+    iter = 10000)
+
+  d$predictions <- as.data.frame(fitted(m))[, "Estimate"]
+  saveRDS(d, rds_path)
+
+  p <- ggplot(d, aes(x = age, y = cumulative_ppt)) +
+    geom_point(aes(color = "Actual Data"), size = 2) +
+    geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+    scale_color_manual(name = "Legend",
+                       values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+    theme_bw() +
+    labs(title = title, x = "Child Age (Month)", y = "Parts per Thousand") +
+    theme(legend.position = "none",
+          plot.title  = element_text(size = 20, hjust = 0.5),
+          axis.title.x = element_text(size = 16),
+          axis.title.y = element_text(size = 16),
+          axis.text.x  = element_text(size = 14),
+          axis.text.y  = element_text(size = 14))
+
+  lag_row <- fixef(m)["lag_Intercept", ]
+  aop <- data.frame(word      = title,
+                    Estimate  = round(lag_row["Estimate"], 1),
+                    Est.Error = round(lag_row["Est.Error"], 1),
+                    Q2.5      = round(lag_row["Q2.5"], 1),
+                    Q97.5     = round(lag_row["Q97.5"], 1),
+                    stringsAsFactors = FALSE)
+
+  list(plot = p, data = d, aop = aop, model = m)
+}
+
+# Make a filesystem-safe slug from a (possibly accented) word.
+make_slug <- function(w, i) {
+  s <- iconv(w, to = "ASCII//TRANSLIT")
+  s <- gsub("[^A-Za-z0-9]+", "_", s)
+  s <- gsub("^_|_$", "", s)
+  if (is.na(s) || s == "") s <- paste0("negword_", i)
+  s
+}
+```
+
+
+
+## Individual Negation Words
+
+This section applies the same modeling procedure to each of the five most frequent French negators. The negators are read directly from the processed data, so this adapts to whatever the extraction step selected.
+
+```{r negation_word_list}
+negation_words <- french_tokens_processed %>%
+  filter(word_category == "Negation") %>%
+  distinct(word) %>%
+  pull(word)
+
+negation_words
+```
+
+```{r per_word_fits, include=FALSE}
+model_dir <- "../french/french_model/modeling"
+data_dir  <- "../french/french_data/processed_data"
+
+results <- list()
+for (i in seq_along(negation_words)) {
+  w    <- negation_words[i]
+  slug <- make_slug(w, i)
+  results[[w]] <- fit_gompertz(
+    d          = filter(functionword_relfreq, word == w, speaker == "child"),
+    title      = w,
+    model_path = file.path(model_dir, paste0(slug, "_lagModel")),
+    rds_path   = file.path(data_dir, paste0(slug, "_childdata.RDS"))
+  )
+}
+```
+
+```{r per_word_plots}
+# Print each individual fitted-curve plot
+for (w in names(results)) {
+  print(results[[w]]$plot)
+}
+```
+
+# Collection of Plots
+
+This section assembles the individual fitted-curve plots into a single multi-panel figure so the negators' acquisition trajectories can be compared side by side.
+
+```{r collection_grid}
+plot_list <- lapply(results, function(r) r$plot)
+
+do.call(gridExtra::grid.arrange,
+        c(plot_list,
+          list(ncol   = 2,
+               bottom = grid::textGrob("Age (Months)", gp = grid::gpar(fontsize = 13)),
+               left   = grid::textGrob("Words (Per Thousand)",
+                                       gp = grid::gpar(fontsize = 13), rot = 90))))
+```
+
+# Age of Production Plot
+
+This concluding section synthesizes the lag-parameter estimates from all the negation word models into a single summary visualization, giving an estimated developmental ordering of the negators together with the uncertainty around each estimate.
+
+```{r age_of_production_build}
+age_of_production <- bind_rows(lapply(results, function(r) r$aop))
+
+age_of_production <-
+  age_of_production %>%
+  mutate(
+    Estimate = as.numeric(Estimate),
+    Est.Error = as.numeric(Est.Error),
+    Q2.5 = as.numeric(Q2.5),
+    Q97.5 = as.numeric(Q97.5),
+    word = fct_reorder(word, Estimate)
+  ) %>%
+  arrange(Estimate)
+
+saveRDS(
+  age_of_production,
+  "../french/french_data/processed_data/french_age_of_production.RDS"
+)
+```
+
+```{r age_of_production_plot}
+age_of_production <- readRDS("../french/french_data/processed_data/french_age_of_production.RDS")
+
+negation_onsetage_plot <-
+  age_of_production %>%
+  mutate(word = fct_reorder(word, Estimate)) %>%
+  ggplot(aes(x = Estimate, y = word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(x = "Age (Months)", y = "") +
+  theme(text = element_text(size = 12),
+        axis.text.y = element_text(size = 12))
+
+negation_onsetage_plot
+```

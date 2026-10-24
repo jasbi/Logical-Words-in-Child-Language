@@ -5,10 +5,6 @@ date: "`r Sys.Date()`"
 output: pdf_document
 ---
 
-# Abstract
-
-
-
 # Setup
 This section loads the R packages needed for data processing, modeling, and visualization. These libraries support reading the processed data file, working with tidy data, fitting Bayesian growth curve models, and arranging the final plots.
 
@@ -27,7 +23,7 @@ knitr::opts_chunk$set(error = TRUE)
 ```
 
 # Load Data
-This section loads the processed Mandarin token data. The dataset is organized at the token level and includes information such as speaker, age, word form, and grammatical category. This dataset serves as the starting point for the frequency tables, plots, and growth curve models.
+Load the processed token file produced by the Mandarin extraction document. Word labels, negation exclusions, and scope classifications are inherited from that file. For both child and parent speech, age refers to the target child's age in completed months.
 
 ```{r processedMandarinTokens}
 # Create directories if they don't exist
@@ -39,11 +35,13 @@ mandarin_tokens_processed <- read_feather("../mandarin/mandarin_data/processed_d
 
 # Computing Cumulative Relative Frequencies
 
-This section computes cumulative relative frequencies for the Mandarin tokens. Because naturalistic child language data can be noisy from month to month, the analysis uses cumulative counts across age. This makes the developmental patterns smoother and easier to model. The resulting frequency tables provide the foundation for the later plots and growth curve analyses.
+Pool token counts across children and corpora within each speaker group and age. Relative frequencies divide target counts by total token counts; cumulative frequencies divide running target counts by running token totals.
+
+In the following three frequency tables, child counts at ages 0–10 months inclusive are overwritten with zero, including counts for nonfunction tokens. These values are imposed during preprocessing and should not be interpreted as observed evidence that children produced no words.
 
 ## Function vs. Content Words
 
-This section calculates the cumulative relative frequency of function words and content words separately for children and caregivers. The goal is to examine how the proportion of function word use changes across age. This broad comparison gives an overall view of grammatical development before looking at individual function words in more detail.
+Compare selected logical words with the remaining tokens, separately for children and parents. "Function" identifies the logical words selected for this study, while "nonfunction" includes all other tokens, including function words outside the selected list.
 
 ```{r}
 syncategory_relfreq <-
@@ -182,12 +180,13 @@ function_words_plot <-
 
 ## Distribution of Individual Function Words
 
-This section applies the same modeling procedure to each individual function word. For each word, the code first plots the observed cumulative frequency trajectory, then fits a Bayesian growth curve model to the child data, extracts the fitted values, and creates an overlay plot comparing the observed and fitted values. The estimated lag parameter is also saved as an estimate of the word’s age of production. The words are organized by semantic category to make the developmental patterns easier to compare.
+For each word, display child and parent frequency patterns, fit the growth model to child data, and compare the child observations with fitted values. Save the fitted data and extract the lag parameter for the onset summary. The lag estimate summarizes the pooled frequency trajectory; it does not
+directly measure an individual child's first observed or first productive use.
 
 ### Negation
 
-This section analyzes Mandarin negation words, including 不bù, 没méi, 没有méiyǒu, and 别bié. For each word, the code plots its cumulative frequency over age, fits a growth curve to the child production data, and extracts the estimated age of production. These words allow us to compare different types of negation, such as general negation, negation of possession or completion, and prohibitive negation.
-
+Analyze the four normalized negators: 不 (bu), 不是 (bushi), 没 (mei), and 没有 (meiyou). The individual-word curves combine retained sentential, discourse, and uncertain uses. The later scope plots separate sentential and discourse uses.
+ 
 ##### 不 bù (general negation)
 
 This subsection analyzes the developmental trajectory of 不 bù, a general negation marker in Mandarin. It is commonly used to negate actions, states, or qualities, similar to “not” in English. The code visualizes its cumulative use across age, fits the growth curve model, and adds the estimated age of production to the summary table.
@@ -258,6 +257,106 @@ bu_plot <-
     legend.text  = element_text(size = 12)
   )
 ```
+
+
+##### 不是 bùshì (copular negation)
+
+This subsection analyzes the developmental trajectory of 不是 bùshì, a copular negation form in Mandarin. It is commonly used to negate identity or classification, similar to “is not” in English. The code visualizes its cumulative use across age, fits the growth curve model, and adds the estimated age of production to the summary table.
+
+```{r bushi_plot, echo=FALSE}
+functionword_relfreq %>%
+  filter(word == "不是") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(. ~ speaker) +
+  theme_bw() +
+  ggtitle("不是 bùshì") +
+  xlab("Age (Months)") +
+  ylab("Cumulative Parts Per Thousand")
+```
+
+```{r bushi_growth_model, include=FALSE}
+bushi_lagModel <- brm(
+  bf(
+    cumulative_ppt ~ upperAsymptote *
+      exp(-exp(((growthRate * exp(1)) / upperAsymptote) * (lag - age) + 1)),
+    upperAsymptote ~ 1,
+    growthRate ~ 1,
+    lag ~ 1,
+    nl = TRUE
+  ),
+  data = filter(
+    functionword_relfreq,
+    word == "不是",
+    speaker == "child"
+  ),
+  prior = c(
+    prior(uniform(0, 40), nlpar = "upperAsymptote", lb = 0, ub = 40),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+  file = "../mandarin/mandarin_model/modeling/bushi_lagModel",
+  iter = 10000
+)
+```
+
+```{r bushi_predictions}
+bushi_predictions <- as.data.frame(fitted(bushi_lagModel))
+
+bushi_childdata <- filter(
+  functionword_relfreq,
+  word == "不是",
+  speaker == "child"
+)
+
+bushi_childdata$predictions <- bushi_predictions[, "Estimate"]
+
+saveRDS(
+  bushi_childdata,
+  "../mandarin/mandarin_data/processed_data/bushi_childdata.RDS"
+)
+```
+
+```{r bushi_age_of_production}
+age_of_production <- bind_rows(
+  age_of_production,
+  data.frame(
+    word = "不是 bùshì",
+    Estimate = round(fixef(bushi_lagModel)[3, 1], 1),
+    Est.Error = round(fixef(bushi_lagModel)[3, 2], 1),
+    Q2.5 = round(fixef(bushi_lagModel)[3, 3], 1),
+    Q97.5 = round(fixef(bushi_lagModel)[3, 4], 1)
+  )
+)
+```
+
+```{r bushi_prediction_plot}
+bushi_plot <-
+  ggplot(bushi_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(
+    name = "Legend",
+    values = c("Actual Data" = "black", "Fitted Values" = "blue")
+  ) +
+  theme_bw() +
+  labs(
+    title = "不是 bùshì",
+    x = "Child Age (Month)",
+    y = "Parts per Thousand"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+```
+
 
 ##### 没 méi (negation of have/completion)
 
@@ -403,78 +502,155 @@ age_of_production <- bind_rows(
 )
 ```
 
-##### 别 bié (prohibitive negation / "don't")
 
-This subsection analyzes 别 bié, a prohibitive negation marker meaning “do not” or “don’t.” It is usually used to tell someone not to do something. The code estimates how this word appears over developmental time and adds its model-based age of production to the larger comparison table.
+#### Sentential and Discourse Negation
+Plot cumulative sentential and discourse negation rates for children using the scope labels assigned during preprocessing. Numerators exclude uncertain and excluded candidates, while denominators include all child tokens. Zero target counts are added only at ages with recorded child speech; this subsection does not impose early-age zeros or fit growth models.
 
-```{r bie_plot, echo=FALSE}
-functionword_relfreq %>%
-  filter(word=="别") %>%
-  ggplot(aes(age, cumulative_ppt)) +
-  geom_point() +
-  facet_grid(.~speaker) +
-  theme_bw() + 
-  ggtitle("别 bié") +
-  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
-```
-
-```{r bie_growth_model, include=FALSE}
-bie_lagModel <- brm(
-  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
-     upperAsymptote ~ 1,
-     growthRate ~ 1,
-     lag ~ 1,
-     nl = TRUE),
-  data = filter(functionword_relfreq, word=="别", speaker=="child"),
-  prior = c(
-    prior(uniform(0, 10), nlpar = "upperAsymptote", lb = 0, ub = 10),
-    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
-    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
-  ),
-  file = "../mandarin/mandarin_model/modeling/bie_lagModel",
-  iter = 10000)
-```
-
-```{r bie_predictions}
-bie_predictions <- as.data.frame(fitted(bie_lagModel))
-
-bie_childdata <- filter(functionword_relfreq, word=="别", speaker=="child")
-bie_childdata$predictions <- bie_predictions[, "Estimate"]
-
-saveRDS(bie_childdata, "../mandarin/mandarin_data/processed_data/bie_childdata.RDS")
-```
-
-```{r bie_prediction_plot} 
-bie_plot <-
-  ggplot(bie_childdata, aes(x = age, y = cumulative_ppt)) +
-  geom_point(aes(color = "Actual Data"), size = 2) +
-  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
-  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
-  theme_bw() + labs(title="别 bié", x="Child Age (Month)", y="Parts per Thousand") + 
-  theme(legend.position = "none") +   
-  theme(
-    plot.title = element_text(size = 20, hjust = 0.5),
-    axis.title.x = element_text(size = 16),
-    axis.title.y = element_text(size = 16),
-    axis.text.x = element_text(size = 14),
-    axis.text.y = element_text(size = 14),
-    legend.title = element_text(size = 14),
-    legend.text  = element_text(size = 12)
-  )
-```
-
-```{r bie_age_of_production}
-age_of_production <- bind_rows(
-  age_of_production,
-  data.frame(word      = "别 bié",
-             Estimate  = round(fixef(bie_lagModel)[3, 1], 1),
-             Est.Error = round(fixef(bie_lagModel)[3, 2], 1),
-             Q2.5      = round(fixef(bie_lagModel)[3, 3], 1),
-             Q97.5     = round(fixef(bie_lagModel)[3, 4], 1),
-             stringsAsFactors = FALSE)
+```{r negation_scope_curve_data, include=FALSE}
+# Check for required columns in processed tokens
+required_columns <- c(
+  "speaker", "age", "negation_category",
+  "negation_scope", "negation_exclusion"
 )
+
+missing_columns <- setdiff(
+  required_columns,
+  names(mandarin_tokens_processed)
+)
+
+if (length(missing_columns) > 0) {
+  stop(
+    "Reload the latest classified processed data. Missing columns: ",
+    paste(missing_columns, collapse = ", ")
+  )
+}
+
+negation_words <- c("不", "不是", "没", "没有")
+
+negation_labels <- c(
+  "不 bù", "不是 bùshì", "没 méi", "没有 méiyǒu"
+)
+
+negation_colors <- c(
+  "不" = "#0072B2",
+  "不是" = "#D55E00",
+  "没" = "#009E73",
+  "没有" = "#CC79A7"
+)
+
+# Children only; retain all child tokens for denominator
+negation_child_tokens <- mandarin_tokens_processed %>%
+  ungroup() %>%
+  filter(speaker == "child", is.finite(age))
+
+negation_age_totals <- negation_child_tokens %>%
+  count(age, name = "total_tokens")
+
+# Calculate frequencies and zero-fill missing combinations
+negation_scope_cumulative <- negation_child_tokens %>%
+  filter(
+    negation_category %in% negation_words,
+    negation_scope %in% c("sentential", "discourse"),
+    is.na(negation_exclusion)
+  ) %>%
+  count(
+    age, negation_category, negation_scope,
+    name = "freq"
+  ) %>%
+  complete(
+    age = negation_age_totals$age,
+    negation_category = negation_words,
+    negation_scope = c("sentential", "discourse"),
+    fill = list(freq = 0L)
+  ) %>%
+  left_join(negation_age_totals, by = "age") %>%
+  group_by(negation_category, negation_scope) %>%
+  arrange(age, .by_group = TRUE) %>%
+  mutate(
+    cumulative_count = cumsum(freq),
+    cumulative_total = cumsum(total_tokens),
+    cumulative_ppt = 1000 * cumulative_count / cumulative_total,
+    negation_category = factor(
+      negation_category,
+      levels = negation_words
+    )
+  ) %>%
+  ungroup()
+
+sentential_negation_childdata <- negation_scope_cumulative %>%
+  filter(negation_scope == "sentential")
+
+discourse_negation_childdata <- negation_scope_cumulative %>%
+  filter(negation_scope == "discourse")
+
+# Save underlying data matching other childdata files
+saveRDS(
+  sentential_negation_childdata,
+  "../mandarin/mandarin_data/processed_data/sentential_negation_childdata.RDS"
+)
+
+saveRDS(
+  discourse_negation_childdata,
+  "../mandarin/mandarin_data/processed_data/discourse_negation_childdata.RDS"
+)
+
+plot_child_negation <- function(plot_data, plot_title) {
+  ggplot(
+    plot_data,
+    aes(age, cumulative_ppt, color = negation_category)
+  ) +
+    geom_line(linewidth = 1) +
+    scale_color_manual(
+      name = NULL,
+      values = negation_colors,
+      breaks = negation_words,
+      labels = negation_labels,
+      drop = FALSE
+    ) +
+    scale_x_continuous(breaks = seq(0, 72, 12)) +
+    scale_y_continuous(limits = c(0, NA)) +
+    labs(
+      title = plot_title,
+      x = "Child age (months)",
+      y = "Cumulative parts per thousand"
+    ) +
+    theme_bw(base_size = 14) +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5)
+    )
+}
 ```
 
+##### Sentential
+```{r sentential_graph}
+sentential_negation_child_plot <- plot_child_negation(
+  sentential_negation_childdata,
+  "Sentential Negation in Children"
+)
+
+saveRDS(
+  sentential_negation_child_plot,
+  "../mandarin/mandarin_data/processed_data/sentential_negation_child_plot.RDS"
+)
+
+sentential_negation_child_plot
+```
+
+##### Discourse
+```{r discourse_graph}
+discourse_negation_child_plot <- plot_child_negation(
+  discourse_negation_childdata,
+  "Discourse Negation in Children"
+)
+
+saveRDS(
+  discourse_negation_child_plot,
+  "../mandarin/mandarin_data/processed_data/discourse_negation_child_plot.RDS"
+)
+
+discourse_negation_child_plot
+```
 ### Conjunction
 
 This section analyzes Mandarin conjunction words, including 和hé, 跟gēn, and 而且érqiě. These words are used to connect nouns, phrases, or clauses. For each word, the code plots the cumulative developmental trajectory, fits a growth curve to child production, and saves the estimated age of production.
@@ -860,7 +1036,7 @@ This section analyzes Mandarin conditional expressions, including 如果rúguǒ,
 
 ##### 如果 rúguǒ
 
-This subsection analyzes 如果 rúguǒ, a conditional marker meaning “if.” It is often used to introduce a hypothetical condition or situation. Because this word appears later and less frequently, the model is fit to child data from later ages. The code plots the observed pattern, fits the growth curve, and records the estimated age of production.
+This subsection analyzes 如果 rúguǒ, a conditional marker meaning “if.” It is often used to introduce a hypothetical condition or situation. The code plots the observed pattern, fits the growth curve, and records the estimated age of production.
 
 example:
 
@@ -1097,7 +1273,7 @@ This section assembles the individual fitted-curve plots into themed multi-panel
 ```{r}
 library(gridExtra)
 
-grid.arrange(bu_plot, mei_plot, meiyou_plot, bie_plot,
+grid.arrange(bu_plot, bushi_plot, mei_plot, meiyou_plot,
              layout_matrix = rbind(c(1, 2), c(3, 4)),
              bottom = textGrob("Age (Months)", gp = gpar(fontsize = 13)),
              left   = textGrob("Words (Per Thousand)", gp = gpar(fontsize = 13), rot = 90))
@@ -1120,7 +1296,8 @@ grid.arrange(ruguo_plot, yaoshi_plot, dehua_plot,
 
 # Age of Production Plot
 
-This concluding section synthesizes the lag-parameter estimates accumulated across all individual word models into a single summary visualization. The resulting figure provides, on a single panel, an estimated developmental ordering of the analyzed function words together with a graphical representation of the uncertainty associated with each estimate. This visualization constitutes the principal empirical contribution of the document, condensing the entire word-by-word modeling effort into a single comparative display of when, on average and with what uncertainty, each function word enters productive child speech.
+Compare model-derived lag estimates across words, ordered by their posterior means. Points represent posterior means, and intervals show the central 95% credible intervals. These estimates summarize pooled
+frequency trajectories rather than individual children's first-production ages.
 
 ```{r}
 age_of_production <- 
@@ -1143,4 +1320,5 @@ functionword_onsetage_plot <-
   scale_x_continuous(breaks = seq(0, 72, by = 3)) +
   labs(x = "Age (Months)", y="") +
   theme(text = element_text(size = 12))
+functionword_onsetage_plot
 ```

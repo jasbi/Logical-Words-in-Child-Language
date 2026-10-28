@@ -1,0 +1,691 @@
+---
+title: "Japanese Negation Plots and Curves"
+author: "Samantha Bai"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+
+# Setup
+
+Loads packages for token summaries, Bayesian modeling, and plotting, and configures knitr to continue after chunk errors.
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(arrow)
+library(brms)
+library(ggeffects)
+library(ggrepel)
+library(grid)
+library(gridExtra)
+```
+
+```{r knitr_options}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+# Load Data
+
+Creates the Japanese model and processed-data directories, loads the processed token table from Feather, and defines `nai` and `iya` as the selected negation words.
+
+```{r processedTokens}
+japanese_data_dir <- "../japanese/japanese_data/processed_data"
+japanese_model_dir <- "../japanese/japanese_model/modeling"
+
+dir.create(japanese_model_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(japanese_data_dir, showWarnings = FALSE, recursive = TRUE)
+
+japanese_tokens_processed <- read_feather(
+  file.path(japanese_data_dir, "japanese_tokens_processed.feather")
+)
+
+japanese_negation_words <- c("nai", "iya")
+```
+
+# Computing Cumulative Relative Frequencies
+
+Counts processed tokens by syntactic category, word, or semantic category, speaker, and age. Sets child counts and denominator contributions at ages 0–10 to zero and excludes later zero-occurrence months only from individual-word cumulative rates.
+
+## Function vs. Content Words
+
+Calculates monthly and cumulative percentages for the processed `syncategory` labels and saves the table. `Function` contains the selected target negators; `nonfunction` contains all other retained tokens, including any other linguistic function words.
+
+```{r syncategory_relfreq}
+japanese_syncategory_relfreq <-
+  japanese_tokens_processed %>%
+  group_by(syncategory, speaker, age) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  complete(nesting(speaker, age), nesting(syncategory), fill = list(freq = 0L)) %>%
+  complete(
+    nesting(syncategory) %>% mutate(speaker = "child"),
+    age = 0:10,
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(speaker == "child" & age <= 10, 0, freq)) %>%
+  group_by(speaker, age) %>%
+  mutate(
+    total = sum(freq),
+    relfreq = ifelse(total == 0, 0, freq / total),
+    pct = relfreq * 100
+  ) %>%
+  group_by(syncategory, speaker) %>%
+  arrange(age) %>%
+  mutate(
+    cum_freq = cumsum(freq),
+    cum_total = cumsum(total),
+    cumulative_relfreq = ifelse(cum_total == 0, 0, cum_freq / cum_total),
+    cumulative_pct = cumulative_relfreq * 100
+  ) %>%
+  ungroup() %>%
+  select(syncategory, speaker, age, freq, total, relfreq, pct,
+         cum_freq, cum_total, cumulative_relfreq, cumulative_pct) %>%
+  ungroup()
+
+saveRDS(
+  japanese_syncategory_relfreq,
+  file.path(japanese_data_dir, "japanese_syncategory_relfreq.RDS")
+)
+```
+
+## Individual Function Words
+
+Calculates full monthly token totals before retaining each word’s occurrence months and the child ages 0–10 zero baselines. Saves monthly and cumulative parts per thousand, with the cumulative denominator summing only the retained months for that word and speaker.
+
+```{r functionword_relfreq}
+japanese_speaker_age_totals <- japanese_tokens_processed %>%
+  count(speaker, age, name = "total") %>%
+  mutate(total = if_else(speaker == "child" & age <= 10, 0L, total))
+
+japanese_functionword_relfreq <-
+  japanese_tokens_processed %>%
+  group_by(word, speaker, age) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  complete(
+    nesting(word) %>% mutate(speaker = "child"),
+    age = 0:10,
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(speaker == "child" & age <= 10, 0, freq)) %>% # zero numerator for early ages
+  left_join(japanese_speaker_age_totals, by = c("speaker", "age")) %>%
+  mutate(total = replace_na(total, 0L),
+         relfreq = ifelse(total == 0, 0, freq / total),
+         ppt = relfreq * 1000) %>%
+  filter(freq > 0 | (speaker == "child" & age %in% 0:10)) %>%
+  group_by(word, speaker) %>%
+  arrange(age) %>%
+  mutate(cum_freq = cumsum(freq),
+         cum_total = cumsum(total),
+         cumulative_relfreq = ifelse(cum_total == 0, 0, cum_freq / cum_total),
+         cumulative_ppt = cumulative_relfreq * 1000) %>%
+  ungroup() %>%
+  select(word, speaker, age, freq, total, relfreq, ppt,
+         cum_freq, cum_total, cumulative_relfreq, cumulative_ppt) %>%
+  ungroup()
+
+saveRDS(japanese_functionword_relfreq, file.path(japanese_data_dir, "japanese_functionword_relfreq.RDS"))
+```
+
+## Function Word Semantic Categories
+
+Calculates monthly parts per thousand and cumulative relative frequency for each processed `word_category` and speaker, then saves the table. The overall plot later selects rows labeled `Negation`.
+
+```{r wordcategory_relfreq}
+japanese_wordcategory_relfreq <-
+  japanese_tokens_processed %>%
+  group_by(word_category, speaker, age) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  complete(nesting(speaker, age), nesting(word_category), fill = list(freq = 0L)) %>%
+  complete(
+    nesting(word_category) %>% mutate(speaker = "child"),
+    age = 0:10,
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(speaker == "child" & age <= 10, 0, freq)) %>%
+  group_by(speaker, age) %>%
+  mutate(total = sum(freq),
+         relfreq = ifelse(total == 0, 0, freq / total),
+         ppt = relfreq * 1000) %>%
+  group_by(word_category, speaker) %>%
+  arrange(age) %>%
+  mutate(cum_freq = cumsum(freq),
+         cum_total = cumsum(total),
+         cumulative_relfreq = ifelse(cum_total == 0, 0, cum_freq / cum_total)) %>%
+  ungroup() %>%
+  select(word_category, speaker, age, freq, total, relfreq, ppt,
+         cum_freq, cum_total, cumulative_relfreq) %>%
+  ungroup()
+
+saveRDS(japanese_wordcategory_relfreq, file.path(japanese_data_dir, "japanese_wordcategory_relfreq.RDS"))
+```
+
+# Plots and Growth Curves
+
+Plots category-level monthly percentages and word-level cumulative rates, fits Bayesian Gompertz curves to child data, and displays observations with fitted values. Saves fitted child data and scope-labeled plot objects where specified.
+
+## Overall Negation Production
+
+Plots monthly percentages for the `Negation` category by speaker and fits a Gompertz curve to the child percentages when child negation counts are present. Saves fitted child data and the final observed-versus-fitted plot object, then displays that plot.
+
+```{r negation_words_plot, echo=FALSE}
+japanese_negation_words_relfreq <- japanese_wordcategory_relfreq %>%
+  ungroup() %>%
+  filter(word_category == "Negation") %>%
+  mutate(pct = relfreq * 100) %>%
+  arrange(speaker, age)
+
+japanese_negation_words_plot <- japanese_negation_words_relfreq %>%
+  ggplot(aes(age, pct)) +
+  geom_point() +
+  facet_grid(. ~ speaker) +
+  theme_bw() +
+  labs(
+    title = "Overall Negation Production",
+    x = "Age (Months)",
+    y = "Monthly Percent of Tokens"
+  ) +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme(text = element_text(size = 14))
+
+japanese_negation_words_plot
+```
+
+```{r negation_words_growth_model, include=FALSE}
+japanese_negation_words_childdata <- japanese_negation_words_relfreq %>%
+  filter(
+    speaker == "child",
+    is.finite(age),
+    is.finite(pct)
+  ) %>%
+  arrange(age)
+
+if (nrow(japanese_negation_words_childdata) == 0L ||
+    !any(japanese_negation_words_childdata$freq > 0)) {
+  stop("No retained child negation tokens are available for modeling.")
+}
+
+japanese_negation_words_lagModel <- brm(
+  bf(
+    pct ~ upperAsymptote *
+      exp(-exp(
+        ((growthRate * exp(1)) / upperAsymptote) *
+          (lag - age) + 1
+      )),
+    upperAsymptote ~ 1,
+    growthRate ~ 1,
+    lag ~ 1,
+    nl = TRUE
+  ),
+  data = japanese_negation_words_childdata,
+  prior = c(
+    prior(
+      uniform(0, 100),
+      nlpar = "upperAsymptote", lb = 0, ub = 100
+    ),
+    prior(
+      uniform(0, 10),
+      nlpar = "growthRate", lb = 0, ub = 10
+    ),
+    prior(
+      uniform(10, 72),
+      nlpar = "lag", lb = 10, ub = 72
+    )
+  ),
+  file = file.path(
+    japanese_model_dir,
+    "japanese_negation_words_lagModel"
+  ),
+  file_refit = "on_change",
+  iter = 10000,
+  seed = 2026
+)
+```
+
+```{r negation_words_predictions}
+japanese_negation_words_predictions <- as.data.frame(
+  fitted(
+    japanese_negation_words_lagModel,
+    newdata = japanese_negation_words_childdata
+  )
+)
+
+japanese_negation_words_childdata$predictions <-
+  japanese_negation_words_predictions[, "Estimate"]
+
+saveRDS(
+  japanese_negation_words_childdata,
+  file.path(japanese_data_dir, "japanese_negation_words_childdata.RDS")
+)
+```
+
+```{r negation_words_prediction_plot}
+japanese_negation_words_plot <- ggplot(
+  japanese_negation_words_childdata,
+  aes(age, pct)
+) +
+  geom_point(color = "black", size = 2) +
+  geom_line(
+    aes(y = predictions),
+    color = "blue",
+    linewidth = 1
+  ) +
+  scale_x_continuous(breaks = seq(0, 72, 12)) +
+  scale_y_continuous(limits = c(0, NA)) +
+  theme_bw() +
+  labs(
+    title = "Overall Negation Production",
+    x = "Child Age (Months)",
+    y = "Monthly Percent of Tokens"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14)
+  )
+
+saveRDS(
+  japanese_negation_words_plot,
+  file.path(japanese_data_dir, "japanese_negation_words_plot.RDS")
+)
+
+japanese_negation_words_plot
+```
+
+
+## Distribution of Individual Function Words
+
+Plots cumulative parts per thousand for the selected words by speaker, fits child growth curves, and uses their fitted values and lag estimates in later displays.
+
+### Negation
+
+Analyzes the `nai` and `iya` rows of the word-frequency table. The later sentential and discourse panels reuse these word-level curves.
+
+##### nai
+
+Plots cumulative occurrences per 1,000 tokens for `nai` by speaker, fits a child Gompertz curve, and saves child data with fitted values. Displays the child fit plot and records the model lag estimate.
+
+```{r nai_plot, echo=FALSE}
+japanese_functionword_relfreq %>%
+  filter(word == "nai") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(. ~ speaker) +
+  theme_bw() +
+  labs(
+    title = "nai",
+    x = "Age (Months)",
+    y = "Cumulative Occurrences per 1,000 Tokens"
+  )
+```
+
+```{r nai_growth_model, include=FALSE}
+japanese_nai_childdata <- japanese_functionword_relfreq %>%
+  ungroup() %>%
+  filter(word == "nai", speaker == "child") %>%
+  arrange(age)
+
+# Retain the upper-asymptote prior used in the Japanese file.
+japanese_nai_upper_bound <- max(
+  5,
+  ceiling(max(japanese_nai_childdata$cumulative_ppt, na.rm = TRUE) * 2)
+)
+
+japanese_nai_lagModel <- brm(
+  bf(
+    cumulative_ppt ~ upperAsymptote *
+      exp(-exp(
+        ((growthRate * exp(1)) / upperAsymptote) *
+          (lag - age) + 1
+      )),
+    upperAsymptote ~ 1,
+    growthRate ~ 1,
+    lag ~ 1,
+    nl = TRUE
+  ),
+  data = japanese_nai_childdata,
+  prior = c(
+    prior_string(
+      paste0("uniform(0, ", japanese_nai_upper_bound, ")"),
+      nlpar = "upperAsymptote",
+      lb = 0,
+      ub = japanese_nai_upper_bound
+    ),
+    prior(
+      uniform(0, 10),
+      nlpar = "growthRate",
+      lb = 0,
+      ub = 10
+    ),
+    prior(
+      uniform(10, 72),
+      nlpar = "lag",
+      lb = 10,
+      ub = 72
+    )
+  ),
+  file = file.path(japanese_model_dir, "japanese_nai_lagModel"),
+  file_refit = "on_change",
+  iter = 10000
+)
+```
+
+```{r nai_predictions}
+japanese_nai_predictions <- as.data.frame(
+  fitted(japanese_nai_lagModel, newdata = japanese_nai_childdata)
+)
+
+japanese_nai_childdata$predictions <- japanese_nai_predictions[, "Estimate"]
+
+saveRDS(
+  japanese_nai_childdata,
+  file.path(japanese_data_dir, "japanese_nai_childdata.RDS")
+)
+```
+
+```{r nai_age_of_production}
+japanese_nai_lag <- fixef(japanese_nai_lagModel)[3, ]
+
+japanese_nai_age_of_production <- tibble(
+  word = "nai",
+  Estimate = round(japanese_nai_lag["Estimate"], 1),
+  Est.Error = round(japanese_nai_lag["Est.Error"], 1),
+  Q2.5 = round(japanese_nai_lag["Q2.5"], 1),
+  Q97.5 = round(japanese_nai_lag["Q97.5"], 1)
+)
+```
+
+```{r nai_prediction_plot}
+japanese_nai_plot <-
+  ggplot(japanese_nai_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(
+    aes(y = predictions, color = "Fitted Values"),
+    linewidth = 1
+  ) +
+  scale_color_manual(
+    name = "Legend",
+    values = c(
+      "Actual Data" = "black",
+      "Fitted Values" = "blue"
+    )
+  ) +
+  theme_bw() +
+  labs(
+    title = "nai",
+    x = "Child Age (Month)",
+    y = "Cumulative Occurrences per 1,000 Tokens"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14)
+  )
+
+japanese_nai_plot
+```
+
+##### iya
+
+Plots cumulative occurrences per 1,000 tokens for `iya` by speaker, fits a child Gompertz curve, and saves child data with fitted values. Displays the child fit plot and records the model lag estimate.
+
+```{r iya_plot, echo=FALSE}
+japanese_functionword_relfreq %>%
+  filter(word == "iya") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(. ~ speaker) +
+  theme_bw() +
+  labs(
+    title = "iya",
+    x = "Age (Months)",
+    y = "Cumulative Occurrences per 1,000 Tokens"
+  )
+```
+
+```{r iya_growth_model, include=FALSE}
+japanese_iya_childdata <- japanese_functionword_relfreq %>%
+  ungroup() %>%
+  filter(word == "iya", speaker == "child") %>%
+  arrange(age)
+
+# Retain the upper-asymptote prior used in the Japanese file.
+japanese_iya_upper_bound <- max(
+  5,
+  ceiling(max(japanese_iya_childdata$cumulative_ppt, na.rm = TRUE) * 2)
+)
+
+japanese_iya_lagModel <- brm(
+  bf(
+    cumulative_ppt ~ upperAsymptote *
+      exp(-exp(
+        ((growthRate * exp(1)) / upperAsymptote) *
+          (lag - age) + 1
+      )),
+    upperAsymptote ~ 1,
+    growthRate ~ 1,
+    lag ~ 1,
+    nl = TRUE
+  ),
+  data = japanese_iya_childdata,
+  prior = c(
+    prior_string(
+      paste0("uniform(0, ", japanese_iya_upper_bound, ")"),
+      nlpar = "upperAsymptote",
+      lb = 0,
+      ub = japanese_iya_upper_bound
+    ),
+    prior(
+      uniform(0, 10),
+      nlpar = "growthRate",
+      lb = 0,
+      ub = 10
+    ),
+    prior(
+      uniform(10, 72),
+      nlpar = "lag",
+      lb = 10,
+      ub = 72
+    )
+  ),
+  file = file.path(japanese_model_dir, "japanese_iya_lagModel"),
+  file_refit = "on_change",
+  iter = 10000
+)
+```
+
+```{r iya_predictions}
+japanese_iya_predictions <- as.data.frame(
+  fitted(japanese_iya_lagModel, newdata = japanese_iya_childdata)
+)
+
+japanese_iya_childdata$predictions <- japanese_iya_predictions[, "Estimate"]
+
+saveRDS(
+  japanese_iya_childdata,
+  file.path(japanese_data_dir, "japanese_iya_childdata.RDS")
+)
+```
+
+```{r iya_age_of_production}
+japanese_iya_lag <- fixef(japanese_iya_lagModel)[3, ]
+
+japanese_iya_age_of_production <- tibble(
+  word = "iya",
+  Estimate = round(japanese_iya_lag["Estimate"], 1),
+  Est.Error = round(japanese_iya_lag["Est.Error"], 1),
+  Q2.5 = round(japanese_iya_lag["Q2.5"], 1),
+  Q97.5 = round(japanese_iya_lag["Q97.5"], 1)
+)
+```
+
+```{r iya_prediction_plot}
+japanese_iya_plot <-
+  ggplot(japanese_iya_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(
+    aes(y = predictions, color = "Fitted Values"),
+    linewidth = 1
+  ) +
+  scale_color_manual(
+    name = "Legend",
+    values = c(
+      "Actual Data" = "black",
+      "Fitted Values" = "blue"
+    )
+  ) +
+  theme_bw() +
+  labs(
+    title = "iya",
+    x = "Child Age (Month)",
+    y = "Cumulative Occurrences per 1,000 Tokens"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14)
+  )
+
+japanese_iya_plot
+```
+
+#### Sentential and Discourse Negation
+
+Labels the fitted `nai` data as `sentential` and the fitted `iya` data as `discourse`, retaining their zero baselines and word-specific cumulative rates. Saves those copied child tables and defines a shared plot of cumulative observations and fitted values; it does not recount tokens by scope.
+
+```{r negation_scope_curve_data, include=FALSE}
+# Reuse the word-level data and fitted predictions:
+# nai = Sentential; iya = Discourse.
+japanese_sentential_negation_childdata <- japanese_nai_childdata %>%
+  ungroup() %>%
+  arrange(age) %>%
+  mutate(
+    negation_category = "nai",
+    negation_scope = "sentential"
+  )
+
+japanese_discourse_negation_childdata <- japanese_iya_childdata %>%
+  ungroup() %>%
+  arrange(age) %>%
+  mutate(
+    negation_category = "iya",
+    negation_scope = "discourse"
+  )
+
+saveRDS(
+  japanese_sentential_negation_childdata,
+  file.path(japanese_data_dir, "japanese_sentential_negation_childdata.RDS")
+)
+
+saveRDS(
+  japanese_discourse_negation_childdata,
+  file.path(japanese_data_dir, "japanese_discourse_negation_childdata.RDS")
+)
+
+# Match the Mandarin and English observation-and-fit panels.
+japanese_plot_child_negation <- function(plot_data, plot_title) {
+  ggplot(plot_data, aes(age, cumulative_ppt)) +
+    geom_point(color = "black", size = 2) +
+    geom_line(
+      aes(y = predictions),
+      color = "blue", linewidth = 1, na.rm = TRUE
+    ) +
+    facet_wrap(~ negation_category, ncol = 2, scales = "free_y") +
+    scale_x_continuous(breaks = seq(0, 72, 12)) +
+    scale_y_continuous(limits = c(0, NA)) +
+    labs(
+      title = plot_title,
+      x = "Child Age (Months)",
+      y = "Cumulative Occurrences per 1,000 Tokens"
+    ) +
+    theme_bw() +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(size = 20, hjust = 0.5),
+      strip.text = element_text(size = 16),
+      axis.title = element_text(size = 16),
+      axis.text = element_text(size = 14)
+    )
+}
+```
+
+##### Sentential
+
+Creates, saves, and displays the `nai` child plot labeled as sentential negation.
+
+```{r sentential_graph}
+japanese_sentential_negation_child_plot <- japanese_plot_child_negation(
+  japanese_sentential_negation_childdata,
+  "Sentential Negation in Children"
+)
+
+saveRDS(
+  japanese_sentential_negation_child_plot,
+  file.path(japanese_data_dir, "japanese_sentential_negation_child_plot.RDS")
+)
+
+japanese_sentential_negation_child_plot
+```
+
+##### Discourse
+
+Creates, saves, and displays the `iya` child plot labeled as discourse negation.
+
+```{r discourse_graph}
+japanese_discourse_negation_child_plot <- japanese_plot_child_negation(
+  japanese_discourse_negation_childdata,
+  "Discourse Negation in Children"
+)
+
+saveRDS(
+  japanese_discourse_negation_child_plot,
+  file.path(japanese_data_dir, "japanese_discourse_negation_child_plot.RDS")
+)
+
+japanese_discourse_negation_child_plot
+```
+
+# Age of Production Plot
+
+Combines the two word-model lag estimates and their 95% credible intervals, saves and displays the table, and displays a point-and-interval plot. Lag is a growth-curve parameter rather than a directly observed first-production age.
+
+```{r age_of_production_build}
+japanese_age_of_production <- bind_rows(
+  japanese_nai_age_of_production,
+  japanese_iya_age_of_production
+) %>%
+  arrange(Estimate) %>%
+  mutate(word = fct_reorder(word, Estimate))
+
+saveRDS(
+  japanese_age_of_production,
+  file.path(japanese_data_dir, "japanese_age_of_production.RDS")
+)
+
+japanese_age_of_production
+```
+
+```{r age_of_production_plot}
+japanese_negation_onsetage_plot <-
+  ggplot(japanese_age_of_production, aes(x = Estimate, y = word)) +
+  geom_pointrange(
+    aes(xmin = Q2.5, xmax = Q97.5)
+  ) +
+  theme_bw() +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(
+    x = "Age (Months)",
+    y = ""
+  ) +
+  theme(
+    text = element_text(size = 12),
+    axis.text.y = element_text(size = 12)
+  )
+
+japanese_negation_onsetage_plot
+```

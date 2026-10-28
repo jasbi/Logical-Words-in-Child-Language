@@ -5,161 +5,273 @@ date: "`r Sys.Date()`"
 output: pdf_document
 ---
 
+# How to Use This File
+
+Runs the French extraction from CHILDES token import through negation coding to the processed Feather export. Set the working directory to `french`, install `childesr`, `tidyverse`, and `arrow`, then run chunks in order. Matching raw caches are reused unless `french_force_download` is `TRUE`; the final file is `french_data/processed_data/french_tokens_processed.feather`.
+
+# Setup
+
+Loads the packages, sets knitr options, and creates relative raw and processed data directories.
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(
+  echo = TRUE,
+  error = FALSE,
+  cache = FALSE
+)
 library(childesr)
 library(tidyverse)
 library(arrow)
-library(stringr)
-library(dplyr)
-library(knitr)
-```
-
-# Loading Data from Childes-DB
-
-We use the package `childesr` to access the data in the CHILDES database. The
-code below downloads and stores all utterances by children and parents from the
-French collection. Unlike Mandarin (where we selected specific corpora out of
-the Chinese collection), the `French` collection maps cleanly to the language,
-so we pull the whole collection.
-
-```{r french_collection}
-target_collection <- "French"
 ```
 
 ```{r directories}
-# Create directories
-dir.create("../french/french_data/raw_data", showWarnings = FALSE, recursive = TRUE)
-dir.create("../french/french_data/processed_data", showWarnings = FALSE, recursive = TRUE)
+french_db_version <- "2026.1"
+french_force_download <- FALSE
+
+french_data_root <- "french_data"
+
+french_raw_dir <- file.path(french_data_root, "raw_data")
+french_processed_dir <- file.path(french_data_root, "processed_data")
+
+dir.create(french_raw_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(french_processed_dir, showWarnings = FALSE, recursive = TRUE)
 ```
 
-```{r ChildesDBimports}
-# Define file paths
-feather_path <- "../french/french_data/raw_data/all_french_tokens.feather"
-csv_path <- "../french/french_data/raw_data/all_french_tokens.csv"
+# Load Data
 
-if (file.exists(feather_path)) {
-  cat("existing data found\n")
-  cat(sprintf("Found existing data file: %s\n", feather_path))
-  cat("Loading from saved feather file...\n\n")
+Loads the selected French corpora from CHILDES release 2026.1 or matching local caches. Validates the imported columns and cache source record before token processing.
 
-  all_french_tokens <- arrow::read_feather(feather_path)
+```{r collections}
+french_target_collection <- "French"
+```
 
-} else if (file.exists(csv_path)) {
-  cat("existing csv data found\n")
-  cat(sprintf("Found existing data file: %s\n", csv_path))
-  cat("Loading from CSV file...\n\n")
+## Import Tokens
 
-  all_french_tokens <- readr::read_csv(csv_path, show_col_types = FALSE)
+Loads a matching raw cache or requests tokens for the selected corpus or collection. Validates columns and row counts, then saves new raw data with its query source record.
 
-  cat("Saving feather version for faster future loading...\n")
-  arrow::write_feather(all_french_tokens, feather_path)
+```{r import_tokens}
+# Only use caches belonging to the pinned release and the same query.
+french_feather_path <- file.path(french_raw_dir, "all_french_tokens.feather")
+french_csv_path <- file.path(french_raw_dir, "all_french_tokens.csv")
+french_source_info_path <- file.path(french_raw_dir, "all_french_tokens_source.rds")
 
+french_query_roles <- c("Target_Child", "Mother", "Father")
+
+french_query_info <- list(
+  db_version = french_db_version,
+  collection = sort(french_target_collection),
+  role = sort(french_query_roles),
+  token = "%",
+  replace = TRUE
+)
+
+french_cache_info <- if (file.exists(french_source_info_path)) {
+  tryCatch(readRDS(french_source_info_path), error = function(e) NULL)
 } else {
-  cat("No existing data found - downloading from Childes\n")
-
-  all_french_tokens <- get_tokens(
-    collection = target_collection,
-    role = c("Target_Child", "Mother", "Father"),
-    token = "*"
-  )
-
-  cat("Saving downloaded data...\n")
-  arrow::write_feather(all_french_tokens, feather_path)
-  readr::write_csv(all_french_tokens, csv_path)
+  NULL
 }
 
-cat(sprintf("Loaded %d tokens from %d children\n",
-            nrow(all_french_tokens),
-            dplyr::n_distinct(all_french_tokens$target_child_id)))
+french_cache_matches <- is.list(french_cache_info) &&
+  identical(french_cache_info$query, french_query_info)
+
+french_loaded_from_cache <- FALSE
+
+if (!french_force_download && french_cache_matches && file.exists(french_feather_path)) {
+
+  cat(sprintf(
+    "Loading verified childes-db %s Feather cache...\n",
+    french_db_version
+  ))
+
+  french_all_tokens <- arrow::read_feather(french_feather_path)
+  french_loaded_from_cache <- TRUE
+
+} else if (!french_force_download && french_cache_matches && file.exists(french_csv_path)) {
+
+  cat(sprintf(
+    "Loading verified childes-db %s CSV cache...\n",
+    french_db_version
+  ))
+
+  french_all_tokens <- readr::read_csv(
+    french_csv_path,
+    show_col_types = FALSE
+  )
+
+  french_loaded_from_cache <- TRUE
+
+} else {
+
+  cat(sprintf(
+    "Downloading French tokens from childes-db %s...\n",
+    french_db_version
+  ))
+
+  french_all_tokens <- childesr::get_tokens(
+    collection = french_target_collection,
+    role = french_query_roles,
+    token = "%",
+    replace = TRUE,
+    db_version = french_db_version
+  )
+}
+
+# Avoid saving an empty/failed download.
+if (is.null(french_all_tokens) || nrow(french_all_tokens) == 0L) {
+  stop(
+    "No tokens returned. Check the query messages and collection name; ",
+    "no cache was saved."
+  )
+}
+
+# Check that the expected columns are available.
+french_required_columns <- c(
+  "target_child_id", "target_child_age", "transcript_id", "utterance_id",
+  "token_order", "gloss", "part_of_speech", "speaker_role",
+  "speaker_code", "utterance_type"
+)
+
+french_missing_columns <- setdiff(
+  french_required_columns,
+  names(french_all_tokens)
+)
+
+if (length(french_missing_columns) > 0L) {
+  stop(
+    "Required columns missing: ",
+    paste(french_missing_columns, collapse = ", ")
+  )
+}
+
+# Confirm that the cached data matches its source record.
+if (
+  french_loaded_from_cache &&
+  !isTRUE(nrow(french_all_tokens) == french_cache_info$row_count)
+) {
+  stop(
+    "Cache row count does not match its source record. ",
+    "Set french_force_download <- TRUE and rerun."
+  )
+}
+
+if (!french_loaded_from_cache) {
+
+  cat("Saving the new data and its release/query information...\n")
+
+  arrow::write_feather(french_all_tokens, french_feather_path)
+  readr::write_csv(french_all_tokens, french_csv_path)
+
+  saveRDS(
+    list(
+      query = french_query_info,
+      downloaded_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
+      childesr_version = as.character(utils::packageVersion("childesr")),
+      row_count = nrow(french_all_tokens)
+    ),
+    french_source_info_path
+  )
+
+} else if (!file.exists(french_feather_path)) {
+
+  arrow::write_feather(french_all_tokens, french_feather_path)
+}
+
+cat(sprintf(
+  "Loaded %d tokens from %d children.\n",
+  nrow(french_all_tokens),
+  french_all_tokens$target_child_id %>% unique() %>% length()
+))
 ```
 
 # Token Processing
 
+Screens target-child ages, records exclusion counts, and adds speaker, completed-month age, and utterance-type labels. Builds neighboring-token context for later matching.
+
 ## Exclusions
 
-The following script cleans up the data. Unlike Mandarin, French has case, so we
-lowercase the gloss for consistent matching. We exclude tokens with missing age
-and those above 72 months of the child's age. All exclusions are stored in a
-file called exclusions_french_summary.csv
+Keeps finite target-child ages from birth to under 72 months. Counts tokens and unique child IDs, including a missing ID as one distinct value, and retains observed tokens at ages 0–10.
 
-```{r exclusionsTokens}
-# French has case distinctions, so normalise gloss to lowercase
-all_french_tokens$gloss <- tolower(all_french_tokens$gloss)
+```{r exclusions}
+french_n_tokens_before_exclusions <- nrow(french_all_tokens)
+french_n_chi_before_exclusions <- french_all_tokens$target_child_id %>% unique() %>% length()
 
-# Count tokens before exclusions
-n_tokens_before_exclusions <- nrow(all_french_tokens)
+french_tokens <- french_all_tokens %>%
+  mutate(gloss = tolower(gloss))
 
-# Number of children before exclusions
-n_chi_before_exclusions <-
-  all_french_tokens$target_child_id %>% unique() %>% length()
+french_tokens <- french_tokens %>%
+  filter(is.finite(target_child_age))
+french_n_tokens_after_finite_age <- nrow(french_tokens)
+french_n_chi_after_finite_age <- french_tokens$target_child_id %>% unique() %>% length()
 
-french_tokens <- all_french_tokens
+french_tokens <- french_tokens %>%
+  filter(target_child_age >= 0, target_child_age < 72)
+french_n_tokens_after_age_range <- nrow(french_tokens)
+french_n_chi_after_age_range <- french_tokens$target_child_id %>% unique() %>% length()
 
-# Removing rows for which age information for the child does not exist
-french_tokens <-
-  french_tokens %>% drop_na(target_child_age)
+french_exclusions <- tibble(
+  n_tokens_before_exclusions = french_n_tokens_before_exclusions,
+  n_after_finite_age = french_n_tokens_after_finite_age,
+  n_after_age_range = french_n_tokens_after_age_range,
+  missing_or_nonfinite_age =
+    french_n_tokens_before_exclusions - french_n_tokens_after_finite_age,
+  outside_age_range =
+    french_n_tokens_after_finite_age - french_n_tokens_after_age_range,
+  n_chi_total = french_n_chi_before_exclusions,
+  n_chi_after_finite_age = french_n_chi_after_finite_age,
+  n_chi_after_age_range = french_n_chi_after_age_range
+)
 
-# Count the tokens after removing NA tokens
-n_tokens_ageNAs_removed <- nrow(french_tokens)
+french_exclusions
+```
 
-# Number of children after excluding NAs
-n_chi_ageNAs_removed <-
-  french_tokens$target_child_id %>% unique() %>% length()
+## Save Exclusion Records
 
-# Take out data for the age range above 6 years (72 months)
-french_tokens <-
-  french_tokens %>%
-  filter(target_child_age < 72)
+Saves the exclusion summary and retained token rows as CSV files in the raw-data directory.
 
-# Count the tokens after excluding older than 6 age range
-n_tokens_ageOver72mo_removed <- nrow(french_tokens)
+```{r save_exclusions}
+readr::write_csv(
+  french_exclusions,
+  file.path(french_raw_dir, "exclusions_french_summary.csv")
+)
+readr::write_csv(
+  french_tokens,
+  file.path(french_raw_dir, "french_tokens_excluded.csv")
+)
+```
 
-# Number of children left after exclusions
-n_chi_ageOver72mo_removed <-
-  french_tokens$target_child_id %>% unique() %>% length()
+## Speaker Roles
 
-# Record the dataframe of exclusions
-exclusions <-
-  data.frame(
-    n_tokens_before_exclusions = n_tokens_before_exclusions,
-    n_after_ageNAs = n_tokens_ageNAs_removed,
-    n_after_age72mo = n_tokens_ageOver72mo_removed,
-    missing_age = n_tokens_before_exclusions - n_tokens_ageNAs_removed,
-    Over72mo = n_tokens_ageNAs_removed - n_tokens_ageOver72mo_removed,
-    n_chi_total = n_chi_before_exclusions,
-    n_chi_ageNAs = n_chi_ageNAs_removed,
-    n_chi_age72over = n_chi_ageOver72mo_removed
+Maps target-child roles to `child` and mother or father roles to `parent` after case normalization. Stops if a role is missing or unexpected.
+
+```{r speaker_roles}
+french_tokens <- french_tokens %>%
+  mutate(
+    speaker = case_when(
+      str_to_lower(as.character(speaker_role), locale = "en") == "target_child" ~ "child",
+      str_to_lower(as.character(speaker_role), locale = "en") %in%
+        c("mother", "father") ~ "parent",
+      TRUE ~ NA_character_
+    )
   )
+
+if (anyNA(french_tokens$speaker)) {
+  french_invalid_speaker_roles <- unique(as.character(french_tokens$speaker_role[is.na(french_tokens$speaker)]))
+  french_invalid_speaker_roles[is.na(french_invalid_speaker_roles)] <- "<missing>"
+  stop("Unexpected or missing speaker roles: ", paste(french_invalid_speaker_roles, collapse = ", "))
+}
 ```
 
-```{r savingData}
-# Save the exclusion data in a file as well as the final data
-write_csv(exclusions, "../french/french_data/raw_data/exclusions_french_summary.csv")
-write_csv(french_tokens, "../french/french_data/raw_data/french_tokens_excluded.csv")
-```
+## Age
 
-## Coding Speaker Roles
-
-Here we group mothers and fathers together as "parents".
-
-```{r}
-# Collapse mothers and fathers into parents
-french_tokens$speaker <- "parent"
-french_tokens$speaker[french_tokens$speaker_role == "Target_Child"] <- "child"
-```
-
-## Coding Age
-
-Here we bin the age data per month.
+Calculates completed-month age by flooring the screened target-child age.
 
 ```{r age}
 french_tokens$age <- french_tokens$target_child_age %>% floor()
 ```
 
-## Grouping Utterance Types
+## Utterance Types
 
-Grouping utterances as declarative, imperative, interrogative, and other.
+Recodes specified question, imperative, and disrupted utterance labels; leaves unlisted labels unchanged.
 
 ```{r utterance_types}
 # Prepare the utterance_type categories for this study based on the utterance_types in childes-db
@@ -183,65 +295,113 @@ french_tokens$utterance_type <-
   )
 ```
 
-# Defining Negation Words in French
+## Context
 
-This analysis focuses only on the **negation** category. We start from a
-generous candidate set of French negators, then keep the **top 5 most
-frequent** in the corpus (computed below).
+Records neighboring glosses and part-of-speech tags within each utterance and initializes `word` to `nonfunction`.
 
-Preverbal markers (kept separate, not selected from):
+```{r context}
+french_tokens <- french_tokens %>%
+  arrange(transcript_id, utterance_id, token_order) %>%
+  group_by(transcript_id, utterance_id) %>%
+  mutate(
+    prev2_gloss = lag(gloss, 2),
+    prev_gloss  = lag(gloss),
+    next_gloss  = lead(gloss),
+    next2_gloss = lead(gloss, 2),
+    prev2_pos   = lag(part_of_speech, 2),
+    prev_pos    = lag(part_of_speech),
+    next_pos    = lead(part_of_speech),
+    next2_pos   = lead(part_of_speech, 2)
+  ) %>%
+  ungroup()
 
-* `ne` / `n'` — preverbal negation clitic
-
-Meaning-bearing negators (top 5 selected from these):
-
-* `pas` — postverbal negation ("not")
-* `non` — "no"
-* `rien` — "nothing"
-
-
-## Selecting the Negation Words
-
-We count how often each candidate negator occurs in the cleaned token table and
-keep the five most frequent. The frequency table is printed so the selection is
-transparent.
-
-```{r negation}
-negation_markers <- c("ne", "n'")
-
-negation_candidates <- c("pas", "non")
-
-negation_main <- c(negation_markers, negation_candidates)
-
-negation_main
+french_tokens$word <- "nonfunction"
 ```
 
-## Marking Negation Words
+# Define Target Words
 
-First we mark all words as "nonfunction", then label the top-5 negation words:
+Marks `pas` and `non` as candidate negation words and assigns function-word labels.
 
-```{r FunctionWords}
-for (x in negation_main) {
+## Mark Target Words
+
+Marks exact gloss matches for `pas` and `non`.
+
+```{r function_words}
+french_function_words <- c("pas", "non")
+
+for (x in french_function_words) {
   french_tokens$word[french_tokens$gloss == x] <- x
 }
 ```
 
 ## Word Categories
 
+Labels matched negators `Negation` and other tokens `nonfunction`.
+
 ```{r wordcategories}
 french_tokens$word_category <- "nonfunction"
-french_tokens$word_category[french_tokens$word %in% negation_main]  <- "Negation"
+french_tokens$word_category[french_tokens$word %in% c("pas", "non")] <- "Negation"
 ```
 
-Mark function vs. nonfunction:
+## Syntactic Category
+
+Labels identified function words `Function` and other tokens `nonfunction`.
 
 ```{r syncategory}
 french_tokens$syncategory <- "Function"
 french_tokens$syncategory[french_tokens$word_category == "nonfunction"] <- "nonfunction"
 ```
 
-## Saving Summary Tables
+# Negation Word Normalization
 
-```{r save_dataframe}
-write_feather(french_tokens, "../french/french_data/processed_data/french_tokens_processed.feather")
+Excludes noun uses of `pas` from negation coding and records eligible `pas` or `non` in `negation_category`.
+
+```{r negation_clean}
+french_tokens <- french_tokens %>%
+  mutate(
+    is_noun_pas = gloss %in% "pas" & part_of_speech %in% c("noun", "n"),
+
+    negation_category = case_when(
+      is_noun_pas ~ NA_character_,
+      gloss == "pas" ~ "pas",
+      gloss == "non" ~ "non",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  mutate(
+    word = if_else(is_noun_pas, "nonfunction", word),
+    word_category = if_else(is_noun_pas, "nonfunction", word_category),
+    syncategory   = if_else(word_category == "nonfunction", "nonfunction", "Function")
+  ) %>%
+  select(-is_noun_pas)
+```
+
+# Sentential vs. Discourse Negation
+
+Labels `non` as `discourse` and eligible `pas` as `sentential`.
+
+```{r negation_categorization}
+french_tokens <- french_tokens %>%
+  arrange(transcript_id, utterance_id, token_order) %>%
+  mutate(
+    negation_scope = case_when(
+      is.na(negation_category) ~ NA_character_,
+      negation_category == "non" ~ "discourse",
+      negation_category == "pas" ~ "sentential",
+      TRUE ~ "uncertain"
+    )
+  ) %>%
+  ungroup() %>%
+  select(-starts_with("."))
+```
+
+# Save Processed Data
+
+Saves the annotated token table to `french_data/processed_data/french_tokens_processed.feather`.
+
+```{r save_processed_data}
+write_feather(
+  french_tokens,
+  file.path(french_processed_dir, "french_tokens_processed.feather")
+)
 ```

@@ -1,127 +1,130 @@
-# Logical-Words-in-Child-Language
-Looking at morphemes corresponding to logical concepts in Spanish and Mandarin.
+# Logical Words in Child Language
 
-## Mandarin 
-This is the Mandarin section of the Logical Words in Child Language project, which examines morphemes corresponding to logical concepts, including negation, conjunction, disjunction, and conditionals in Mandarin.
+A cross-linguistic corpus study of when children start producing logical function words, currently focused on **negation**. Using child–parent transcripts from CHILDES and Bayesian Gompertz growth-curve models, the project estimates a population-level **onset of production** for each negator. It also compares **sentential** and **discourse** negation across six languages.
 
-For Mandarin, the analysis tracks the developmental onset of 12 target function words in spontaneous child speech, drawing on 20 corpora from the CHILDES database. 
-
-### Function Words Analyzed
-| Category | Mandarin Forms | Description of Function | Representative Research |
+| Language | Target negators | Folder | Status |
 |---|---|---|---|
-| Negation | 不 *bù*, 没 *méi*, 没有 *méiyǒu*, 别 *bié* | Negates actions, states, possession, completion, or commands. | Lin (2003); Ernst (1995); Po-Lun & Pan (2001) |
-| Conjunction | 和 *hé*, 跟 *gēn*, 而且 *érqiě* | Coordinates nouns, people, phrases, or adds related information. | Li & Thompson (1981); Xing (2001); Lü (1999) |
-| Disjunction | 或者 *huòzhě*, 还是 *háishi* | Expresses alternatives; 或者 is mainly used in statements, while 还是 is mainly used in questions. | MY Erlewine (2025) |
-| Conditional | 如果 *rúguǒ*, 要是 *yàoshi*, 的话 *dehuà* | Marks factual, hypothetical, or spoken conditional clauses. | Wang (1985); Liu et al. (2001); Chao (1968) |
+| Mandarin | 不 *bù*, 没 *méi* | `mandarin/` | Revised pipeline |
+| English | *no*, *not* / *n't* | `english/` | Revised pipeline |
+| French | *non*, *pas* | `french/` | Revised pipeline |
+| Japanese | *nai*, *iya* | `japanese/` | Revised pipeline |
+| Spanish | *no* | `spanish/` | Coding rules drafted; code still uses the earlier template |
+| German | *nein*, *nicht*, *kein* | — | Coding rules drafted; pipeline not yet added |
 
-### Example Sentences
-| Category | Mandarin | Translation |
-|---|---|---|
-| Negation | *妈妈给宝宝讲故事好不好？不要。* | “How about Mom tells Baby a story? Don’t want to.” |
-| Conjunction | *妈妈和老鼠。* | “Mom and the mouse.” |
-| Disjunction | *是开心还是害怕？* | “Is he/she happy or scared?” |
-| Conditional | *如果下雨天……* | “If it’s a rainy day …” |
+---
 
-Ambiguous items are disambiguated by context: **还是** is counted only in interrogative utterances, in the “or” sense, and **跟** is counted only when flanked by nominal or pronominal POS tags on both sides, in the “and” sense.
+## Repository layout
 
-### Data source
-All data come from **[CHILDES](https://talkbank.org/childes/)** (Child Language Data Exchange System), the child-language component of the [TalkBank](https://talkbank.org/) system, maintained by Brian MacWhinney at Carnegie Mellon and supported by NICHD grant HD082736.
-
-The Mandarin pipeline pulls tokens from 20 Mandarin corpora hosted on CHILDES via the [`childesr`](https://github.com/langcog/childesr) R package, which queries the [CHILDES database backend](https://sla.talkbank.org/TBB/childes):
- 
 ```
-AcadLang, BJCMC, Chang1, Chang2, ChangPlay, ChangPN, Erbaugh,
-LiReading, LiZhou, NSCtoys, TCCM, TCCM-Reading, Tong, Xinjiang,
-Zhou1, Zhou2, Zhou3, ZhouAssessment, ZhouDinner, ZhouNarratives
+Logical-Words-in-Child-Language/
+├── mandarin/     Mandarin_functionword_extraction.Rmd → Mandarin_Negation_PlotsAndCurves.Rmd
+├── english/      English_functionword_extraction.Rmd  → English_Negation_PlotsAndCurves.Rmd
+├── french/       French_functionword_extraction.Rmd   → French_Negation_PlotsAndCurves.Rmd
+├── japanese/     Japanese_functionword_extraction.Rmd → Japanese_Negation_PlotsAndCurves.Rmd
+├── spanish/      earlier-template extraction and plotting files
+├── summary/      Combined_Negation_Curves_and_Onsets.Rmd (all languages on one set of figures)
+├── bucld/        BUCLD 51 and LSA 2025 abstracts and their figure data
+└── childes_logicwords.Rproj
 ```
 
-### Getting Started 
+Each language pipeline writes to its own folder:
 
-#### Prerequisites
- 
-* **R** (≥ 4.2)
-* A working **C++ toolchain and Stan** (required by `brms`); see the [brms installation guide](https://paul-buerkner.github.io/brms/)
-* For rendering Chinese characters in PDF output: **XeLaTeX** and a Simplified Chinese font, such as PingFang SC on macOS
-* Required R packages:
+```
+<language>/
+├── <language>_data/raw_data/          cached CHILDES downloads, exclusion records
+├── <language>_data/processed_data/    processed tokens (.feather), rate tables and fitted curves (.RDS)
+└── <language>_model/modeling/         cached brms model fits
+```
+
+These folders are created on the first run.
+
+---
+
+## Method
+
+**Data.** Word tokens come from [CHILDES](https://talkbank.org/childes/) via the [`childesr`](https://github.com/langcog/childesr) R package, pinned to database release **2026.1**:
+
+- English: Eng-NA and Eng-UK collections
+- French: French collection
+- Japanese: Japanese collection
+- Mandarin: 20 corpora (AcadLang, BJCMC, Chang1, Chang2, ChangPlay, ChangPN, Erbaugh, LiReading, LiZhou, NSCtoys, TCCM, TCCM-Reading, Tong, Xinjiang, Zhou1, Zhou2, Zhou3, ZhouAssessment, ZhouDinner, ZhouNarratives)
+
+**Exclusions.** Tokens are kept if the target child's age is known and between 0 and 72 months. Each extraction file saves a summary of every exclusion step.
+
+**Speakers.** The target child is coded as *child*. All other speakers are grouped as *parents*.
+
+**Counting.** Counts are at the token level. For each speaker group and month, the cumulative rate is the running count of a negator per 1,000 tokens that group has produced up to that month. Child months 0–10 are fixed at zero as a baseline.
+
+**Growth curves.** A three-parameter Gompertz curve is fit to each child trajectory in `brms`:
+
+```
+y = A · exp( −exp( (μ·e / A) · (λ − age) + 1 ) )
+```
+
+- **A** is the upper asymptote.
+- **μ** is the maximum growth rate.
+- **λ** is the lag.
+
+All three parameters have uniform priors, with λ bounded to 10–72 months. **λ is the onset estimate.** It's a curve parameter, not the age of a child's first recorded use.
+
+**Scope.** Each negator token is also labeled **sentential** (inside a clause), **discourse** (a standalone response) or **mixed** (a discourse negator followed by a sentential one, e.g. *No, I don't want it*). Separate curves and onsets are fit for each word-by-scope combination.
+
+---
+
+## Getting started
+
+### Prerequisites
+- **R** ≥ 4.2
+- A C++ toolchain and **Stan** for `brms` (see the [brms installation guide](https://paul-buerkner.github.io/brms/))
+- **XeLaTeX** and a Simplified Chinese font (e.g. PingFang SC) to knit the Mandarin and summary PDFs
+- R packages:
   ```r
   install.packages(c("childesr", "tidyverse", "arrow", "brms",
-                     "ggeffects", "ggrepel", "gridExtra"))
+                     "ggeffects", "ggrepel", "gridExtra", "stringi"))
   ```
 
-#### Installation
-1. Clone the main repo
-   ```sh
-   git clone https://github.com/github_username/Logical-Words-in-Child-Language.git
-   ```
-2. Navigate to the Mandarin section
-   ```sh
-   cd Logical-Words-in-Child-Language/mandarin
-   ```
-3. Open the project in RStudio, or your preferred R environment, with the working directory set to the `mandarin/` folder
-4. The pipeline will create `mandarin_data/` and `mandarin_model/` subdirectories on first run
+### Install
+```sh
+git clone https://github.com/jasbi/Logical-Words-in-Child-Language.git
+cd Logical-Words-in-Child-Language
+```
+Open `childes_logicwords.Rproj` in RStudio.
 
-#### Usage
-Knit the two R Markdown files in order:
- 
-1. **`logicword_extraction_mandarin.Rmd`** pulls tokens from the 20 Mandarin CHILDES corpora via `childesr`, applies age and speaker filtering, tags target function words with context based disambiguation for 还是 and 跟, and saves a processed token file. The CHILDES download runs on first knit only; subsequent knits load the cached feather file.
-2. **`MandarinPlotsAndCurves.Rmd`** computes cumulative relative frequencies per age and speaker, then fits a Bayesian Gompertz lag model in `brms` for each word's cumulative frequency in child speech.
+### Run one language
+Set the working directory to that language's folder, then knit two files in order:
+
+1. **`<Language>_functionword_extraction.Rmd`**
+   - Downloads the corpora one file per corpus, caching each and reusing it on later runs.
+   - Applies the exclusions, assigns speaker roles and age in months, and codes each negator and its scope.
+   - Saves the result to `<language>_data/processed_data/<language>_tokens_processed.feather`.
+   - To force a fresh download, set `<language>_force_download <- TRUE`.
+2. **`<Language>_Negation_PlotsAndCurves.Rmd`**
+   - Computes the cumulative rates and fits growth curves for overall negation, each negator, and each word × scope.
+   - Saves fitted curves and onset tables to `processed_data/`.
+   - Fitted models are cached in `<language>_model/modeling/` and refit only when the data or model change.
+
+> **Japanese** also needs `japanese/japanese_neg_lexicon.csv` (columns `form`, `target`, `form_type`) before extraction.
+
+### Combine languages
+After running the language pipelines, knit **`summary/Combined_Negation_Curves_and_Onsets.Rmd`**. It reads three files from each language's `processed_data/` folder and refits nothing:
+
+- `<language>_sentential_negation_childdata.RDS`
+- `<language>_discourse_negation_childdata.RDS`
+- `<language>_negation_scope_age_of_production.RDS`
+
+It draws three figures:
+
+1. All sentential growth curves
+2. All discourse growth curves
+3. Onset estimates with 95% credible intervals
+
+Two settings at the top of the file:
+
+- `allow_missing_languages`: leave it `FALSE` to stop when a language's files are missing, or set it to `TRUE` to skip that language with a warning. Spanish and German don't produce these files yet, so set it to `TRUE` for now.
+- `normalize_curves`: set to `TRUE` to scale each curve to 0–1 so growth timing is easier to compare.
+
+---
 
 
-## Spanish
-
-This is the Spanish section of the Logical Words in Child Language project, which examines morphemes corresponding to logical concepts, including negation, conjunction, disjunction, and affirmation in Spanish.
-
-For Spanish, the analysis tracks the developmental emergence of high-frequency target function words in spontaneous child speech, with attention to their syntax, semantics, and use in discourse.
-
-### Function Words Analyzed
-| Category | Spanish Forms | Description of Function | Representative Research |
-|---|---|---|---|
-| Negation | no, nunca, nadie, nada, ningún | Negates propositions, actions, or existential reference. | Richard Zanuttini (1997); Dale April Koike |
-| Conjunction | y, pero, sino | Coordinates clauses or phrases; additive or adversative relations. | Bosque & Demonte (1999); Luis López (2009) |
-| Disjunction | o, u | Expresses logical alternatives or choices. | Paul Portner (2009) |
-| Affirmation | sí | Marks affirmation or positive response. | Bosque & Demonte (1999) |
-
-### Example Sentences
-| Category | Spanish | Translation |
-|---|---|---|
-| Negation | *No quiero leche.* | “I do not want milk.” |
-| Conjunction | *María y Juan juegan.* | “María and Juan are playing.” |
-| Disjunction | *¿Quieres té o café?* | “Do you want tea or coffee?” |
-| Affirmation | *Sí, quiero más.* | “Yes, I want more.” |
-
-Ambiguous items should be handled carefully during preprocessing. In particular, **sí** means “yes” and functions as an affirmative polarity marker, while **si** means “if” and functions as a conditional marker. Because CHILDES transcripts may omit accents inconsistently, Spanish preprocessing may require normalization or manual checking to distinguish these forms.
-
-### Data source
-All data come from **[CHILDES](https://talkbank.org/childes/)** (Child Language Data Exchange System), the child-language component of the [TalkBank](https://talkbank.org/) system, maintained by Brian MacWhinney at Carnegie Mellon and supported by NICHD grant HD082736.
-
-The Spanish pipeline pulls tokens from Spanish CHILDES corpora via the [`childesr`](https://github.com/langcog/childesr) R package, which queries the [CHILDES database backend](https://sla.talkbank.org/TBB/childes).
-
-### Getting Started
-
-#### Prerequisites
-
-* **R** (≥ 4.2)
-* A working **C++ toolchain and Stan** (required by `brms`); see the [brms installation guide](https://paul-buerkner.github.io/brms/)
-* Required R packages:
-  ```r
-  install.packages(c("childesr", "tidyverse", "arrow", "brms",
-                     "ggeffects", "ggrepel", "gridExtra"))
-  ```
-
-#### Installation
-1. Clone the main repo
-   ```sh
-   git clone https://github.com/github_username/Logical-Words-in-Child-Language.git
-   ```
-2. Navigate to the Spanish section
-   ```sh
-   cd Logical-Words-in-Child-Language/spanish
-   ```
-3. Open the project in RStudio, or your preferred R environment, with the working directory set to the `spanish/` folder
-4. The pipeline will create `spanish_data/` and `spanish_model/` subdirectories on first run
-
-#### Usage
-Knit the two R Markdown files in order:
-
-1. **`logicword_extraction_spanish.Rmd`** pulls tokens from Spanish CHILDES corpora via `childesr`, applies age and speaker filtering, tags target function words, and saves a processed token file. The CHILDES download runs on first knit only; subsequent knits load the cached feather file.
-2. **`SpanishPlotsAndCurves.Rmd`** computes cumulative relative frequencies per age and speaker, then fits a growth curve model for each word's cumulative frequency in child speech.
+## Data and software credits
+- MacWhinney, B. (2000). *The CHILDES Project: Tools for Analyzing Talk*. CHILDES is part of [TalkBank](https://talkbank.org/), supported by NICHD grant HD082736.

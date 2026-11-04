@@ -1,0 +1,998 @@
+form,target,form_type,note,n_parent,n_child
+nai,nai,standalone,,1167,1255
+janai,nai,copula,,1816,506
+dame,outside,prohibition,,1034,211
+abunai,exclude,not_negative,not negation (lexical -nai or -naide ending),463,89
+nainai,exclude,baby_talk,nainai = put away; inai inai baa = peekaboo,279,272
+chigau,outside,correction,,335,211
+iya,iya,iya,,200,302
+uun,outside,answer_no,,241,179
+shiranai,nai,verb,,207,183
+inai,nai,verb,,155,143
+shinai,nai,verb,,210,72
+iranai,nai,verb,,194,82
+wakaranai,nai,verb,,233,39
+naku,exclude,ambiguous,mostly 泣く 'cry',105,95
+dekinai,nai,verb,,133,45
+konai,nai,verb,,103,71
+ikemasen,outside,polite_masen,polite -masen negative,143,20
+kitanai,exclude,not_negative,not negation (lexical -nai or -naide ending),105,42
+kamoshirenai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,117,24
+shinaide,nai,verb_naide,,130,5
+mienai,nai,verb,,90,36
+ikanai,nai,verb,,89,34
+janakute,nai,copula,,113,7
+nakatta,nai,standalone,,52,50
+ikenai,nai,verb,excluded in context after obligation forms,73,26
+iwanai,nai,verb,,77,10
+wakannai,nai,verb_colloquial,,33,50
+denai,nai,verb,,51,31
+inaiinai,exclude,baby_talk,nainai = put away; inai inai baa = peekaboo,56,24
+hairanai,nai,verb,,61,16
+torenai,nai,verb,,67,9
+tabenai,nai,verb,,53,13
+tsunaide,exclude,not_negative,not negation (lexical -nai or -naide ending),31,34
+kikoenai,nai,verb,,58,5
+taberarenai,nai,verb,,53,3
+shinakya,exclude,obligation,must X,38,9
+shitenai,nai,verb,,27,20
+shinakute,nai,verb,,43,1
+nattenai,nai,verb,,24,18
+akanai,nai,verb,,23,18
+iie,outside,answer_no,,38,3
+nomanai,nai,verb,,29,11
+haittenai,nai,verb,,27,10
+tsuitenai,nai,verb,,24,12
+konakatta,nai,verb,,23,12
+ugokanai,nai,verb,,26,8
+nenai,nai,verb,,13,20
+shinakatta,nai,verb,,19,14
+naranai,nai,verb,,28,4
+noranai,nai,verb,,27,5
+ikanakya,exclude,obligation,must X,22,8
+yuwanai,nai,verb,,19,11
+sawaranai,nai,verb,,27,2
+ikarenai,nai,verb,,27,1
+iwanakya,exclude,obligation,must X,27,1
+tsukanai,nai,verb,,22,5
+tsukenai,nai,verb,,24,3
+detenai,nai,verb,,16,10
+kaitenai,nai,verb,,16,9
+kitenai,nai,verb,,15,10
+shooganai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,21,4
+todokanai,nai,verb,,21,4
+asobanai,nai,verb,,19,5
+futtenai,nai,verb,,6,18
+kakanai,nai,verb,,19,5
+sawaranaide,nai,verb_naide,,22,2
+irenai,nai,verb,,21,2
+inakatta,nai,verb,,10,12
+kakenai,nai,verb,,17,5
+konakute,nai,verb,,20,1
+kurenai,nai,verb,,14,7
+minakya,exclude,obligation,must X,15,6
+yaranai,nai,verb,,15,6
+mottenai,nai,verb,,14,6
+sumimasen,outside,apology_masen,apology; polite -masen form,7,13
+tsukenakute,nai,verb,,19,1
+hainnai,nai,verb_colloquial,,19,0
+ienai,nai,verb,,15,4
+minakatta,nai,verb,,8,11
+nottenai,nai,verb,,10,9
+kikanai,nai,verb,,13,5
+ochinai,nai,verb,,14,4
+okanai,nai,verb,,18,0
+abunakatta,exclude,not_negative,not negation (lexical -nai or -naide ending),9,8
+arimasen,outside,polite_masen,polite -masen negative,15,2
+dasanaide,nai,verb_naide,,17,0
+ikanaide,nai,verb_naide,,15,2
+kudasaimasen,outside,polite_masen,polite -masen negative,6,11
+nakanakatta,nai,verb,,6,11
+sukunai,exclude,not_negative,not negation (lexical -nai or -naide ending),9,8
+agenai,nai,verb,,6,10
+ikanakute,nai,verb,,16,0
+janakatta,nai,copula,,12,4
+kaeranai,nai,verb,,12,4
+konaide,nai,verb_naide,,15,1
+otosanaide,nai,verb_naide,,16,0
+toranai,nai,verb,,14,2
+yomenai,nai,verb,,8,8
+yuwanakya,exclude,obligation,must X,16,0
+irimasen,outside,polite_masen,polite -masen negative,2,13
+iwanaide,nai,verb_naide,,15,0
+nakanai,nai,verb,,10,5
+irenakya,exclude,obligation,must X,12,2
+iwanakatta,nai,verb,,7,7
+minai,nai,verb,,10,4
+nakute,nai,standalone,,11,3
+orinai,nai,verb,,8,6
+shimasen,outside,polite_masen,polite -masen negative,7,7
+yomanai,nai,verb,,8,6
+akenaide,nai,verb_naide,,13,0
+iwanakute,nai,verb,,12,1
+tsukenakya,exclude,obligation,must X,5,8
+akerarenai,nai,verb,,10,2
+dasanai,nai,verb,,12,0
+fuzakenaide,nai,verb_naide,,12,0
+ijiranaide,nai,verb_naide,,12,0
+ikanakatta,nai,verb,,7,5
+inainai,exclude,baby_talk,nainai = put away; inai inai baa = peekaboo,7,5
+kawanai,nai,verb,,12,0
+konakya,exclude,obligation,must X,8,4
+kondenai,nai,verb,,2,10
+tabetenai,nai,verb,,8,4
+ijiranai,nai,verb,,10,1
+kaettenai,nai,verb,,4,7
+kobosanai,nai,verb,,8,3
+nagenaide,nai,verb_naide,,11,0
+tarinai,nai,verb,,11,0
+toorenai,nai,verb,,9,2
+yada,iya,iya,,0,11
+ittenai,nai,verb,,3,7
+kinai,nai,verb,,7,3
+kobosanaide,nai,verb_naide,,10,0
+kowaretenai,nai,verb,,6,4
+norenai,nai,verb,,9,1
+ochitenai,nai,verb,,6,4
+akenai,nai,verb,,9,0
+dekitenai,nai,verb,,5,4
+denakute,nai,verb,,9,0
+hairenai,nai,verb,,8,1
+kinakute,nai,verb,,8,1
+tsukawanai,nai,verb,,8,1
+hakanai,nai,verb,,4,4
+irerarenai,nai,verb,,7,1
+kawanakute,nai,verb,,7,1
+kikoenakatta,nai,verb,,8,0
+mitenai,nai,verb,,5,3
+yannai,nai,verb_colloquial,,8,0
+abarenaide,nai,verb_naide,,7,0
+asobenai,nai,verb,,6,1
+dekinakatta,nai,verb,,7,0
+inainainai,exclude,baby_talk,nainai = put away; inai inai baa = peekaboo,7,0
+irenaide,nai,verb_naide,,7,0
+iretenai,nai,verb,,7,0
+kaenai,nai,verb,,7,0
+kinakya,exclude,obligation,must X,6,1
+kirenai,nai,verb,,6,1
+kowasanaide,nai,verb_naide,,7,0
+nagenai,nai,verb,,7,0
+nakya,exclude,obligation,,7,0
+noranaide,nai,verb_naide,,7,0
+noranakatta,nai,verb,,6,1
+nuganai,nai,verb,,7,0
+osanai,exclude,not_negative,幼い 'young' vs 押さない 'won't push',6,1
+otosanai,nai,verb,,7,0
+shaberanai,nai,verb,,7,0
+shimattenai,nai,verb,,4,3
+shinakucha,exclude,obligation,must X,7,0
+suimasen,outside,apology_masen,apology; polite -masen form,7,0
+taberenai,nai,verb,,6,1
+tooremasen,outside,polite_masen,polite -masen negative,4,3
+attamaranai,nai,verb,,2,4
+dasanakute,nai,verb,,6,0
+dasenai,nai,verb,,5,1
+dekimasen,outside,polite_masen,polite -masen negative,6,0
+gozaimasen,outside,polite_masen,polite -masen negative,1,5
+haitenai,nai,verb,,3,3
+hakanakute,nai,verb,,6,0
+kaeranakya,exclude,obligation,must X,6,0
+kaketenai,nai,verb,,2,4
+kesanaide,nai,verb_naide,,6,0
+kienai,nai,verb,,5,1
+kiranai,nai,verb,,2,4
+kusattenai,nai,verb,,3,3
+kuttsukanai,nai,verb,,5,1
+makenai,nai,verb,,6,0
+nakanaide,nai,verb_naide,,6,0
+netenai,nai,verb,,5,1
+nokottenai,nai,verb,,5,1
+nuretenai,nai,verb,,3,3
+sawannai,nai,verb_colloquial,,5,1
+shindenai,nai,verb,,2,4
+tabenaide,nai,verb_naide,,6,0
+tabenakya,exclude,obligation,must X,6,0
+tomaranai,nai,verb,,5,1
+tsukanakatta,nai,verb,,5,1
+undenai,nai,verb,,4,2
+yuwanaide,nai,verb_naide,,6,0
+agemasen,outside,polite_masen,polite -masen negative,1,4
+akenakute,nai,verb,,5,0
+araenai,nai,verb,,4,1
+arukenai,nai,verb,,3,2
+denakatta,nai,verb,,1,4
+fukanai,nai,verb,,3,2
+fumanaide,nai,verb_naide,,5,0
+furanai,nai,verb,,5,0
+fuzakenai,nai,verb,,5,0
+imasen,outside,polite_masen,polite -masen negative,4,1
+inaide,nai,verb_naide,,4,1
+kaeranakatta,nai,verb,,2,3
+kakanakya,exclude,obligation,must X,5,0
+kawaitenai,nai,verb,,2,3
+kiretenai,nai,verb,,0,5
+kurenakatta,nai,verb,,0,5
+mawattenai,nai,verb,,2,3
+mienakatta,nai,verb,,3,2
+nokkannai,nai,verb_colloquial,,5,0
+oboetenai,nai,verb,,5,0
+oitenai,nai,verb,,1,4
+okanakya,exclude,obligation,must X,5,0
+orirarenai,nai,verb,,4,1
+osanaide,nai,verb_naide,,5,0
+osanakya,exclude,obligation,must X,5,0
+sawannaide,nai,verb_naide,,1,4
+shimawanai,nai,verb,,5,0
+shiranakatta,nai,verb,,5,0
+shirimasen,outside,polite_masen,polite -masen negative,4,1
+tabenakatta,nai,verb,,1,4
+tondenai,nai,verb,,3,2
+utsuttenai,nai,verb,,4,1
+yaburanaide,nai,verb_naide,,5,0
+yakenai,nai,verb,,0,5
+yurenai,nai,verb,,2,3
+yuwanakatta,nai,verb,,3,2
+arawanai,nai,verb,,4,0
+arawanakute,nai,verb,,4,0
+arawanakya,exclude,obligation,must X,3,1
+atattenai,nai,verb,,3,1
+detenakatta,nai,verb,,2,2
+fukanakya,exclude,obligation,must X,4,0
+furanaide,nai,verb_naide,,4,0
+hairanaide,nai,verb_naide,,4,0
+haittenakatta,nai,verb,,3,1
+hakenai,nai,verb,,3,1
+hanasanai,nai,verb,,4,0
+hashiranai,nai,verb,,4,0
+hipparanai,nai,verb,,4,0
+hipparanaide,nai,verb_naide,,4,0
+irenakute,nai,verb,,4,0
+kakusanakute,nai,verb,,4,0
+kamanai,nai,verb,,3,1
+kattenai,nai,verb,,3,1
+kawanakya,exclude,obligation,must X,4,0
+kazaranai,nai,verb,,3,1
+kazoerarenai,nai,verb,,4,0
+kiitenai,nai,verb,,4,0
+kikanakatta,nai,verb,,3,1
+kitenakatta,nai,verb,,4,0
+kowasanai,nai,verb,,4,0
+migakanai,nai,verb,,2,2
+naitenai,nai,verb,,2,2
+nakereba,exclude,obligation,,2,2
+narabenai,nai,verb,,2,2
+narabenaide,nai,verb_naide,,2,2
+nobitenai,nai,verb,,2,2
+nomenai,nai,verb,,4,0
+oretenai,nai,verb,,2,2
+sawaranakatta,nai,verb,,1,3
+shimaranai,nai,verb,,4,0
+sumanai,nai,verb,,4,0
+taorenai,nai,verb,,1,3
+taosanaide,nai,verb_naide,,4,0
+torenakatta,nai,verb,,3,1
+toriagenaide,nai,verb_naide,,4,0
+tsukerarenai,nai,verb,,4,0
+tsuketenai,nai,verb,,2,2
+tsukuranai,nai,verb,,4,0
+tsukurenai,nai,verb,,3,1
+ugoitenai,nai,verb,,3,1
+ugokasanaide,nai,verb_naide,,4,0
+ugokenai,nai,verb,,2,2
+utawanai,nai,verb,,3,1
+uttenakatta,nai,verb,,2,2
+wakaranakatta,nai,verb,,4,0
+wakarimasen,outside,polite_masen,polite -masen negative,3,1
+yakanai,nai,verb,,2,2
+yaranaide,nai,verb_naide,,4,0
+yaranakatta,nai,verb,,3,1
+yondenai,nai,verb,,3,1
+yuttenai,nai,verb,,1,3
+aitenai,nai,verb,,2,1
+akenakya,exclude,obligation,must X,3,0
+asobanakatta,nai,verb,,2,1
+asobanakya,exclude,obligation,must X,3,0
+ataranai,nai,verb,,1,2
+denakya,exclude,obligation,must X,2,1
+dewaarimasen,outside,polite_masen,polite -masen negative,3,0
+fuitenai,nai,verb,,2,1
+hashirenai,nai,verb,,3,0
+itaku nai,nai,adjective,,0,3
+janakya,exclude,obligation,,2,1
+kaenakute,nai,verb,,2,1
+kamenai,nai,verb,,3,0
+katazukenai,nai,verb,,3,0
+katazukenakya,exclude,obligation,must X,3,0
+katazuketenai,nai,verb,,3,0
+kesanakute,nai,verb,,3,0
+kesenai,nai,verb,,1,2
+kezurenai,nai,verb,,3,0
+kiitenakatta,nai,verb,,2,1
+kiniiranai,nai,verb,,3,0
+kirarenai,nai,verb,,2,1
+korarenai,nai,verb,,3,0
+kowarenakatta,nai,verb,,3,0
+kowashitenai,nai,verb,,1,2
+kudasaranai,nai,verb,request 'won't you give'; questions not excluded,3,0
+kumitatenakya,exclude,obligation,must X,3,0
+kurenakute,nai,verb,,3,0
+kuttsuitenai,nai,verb,,3,0
+mazenai,nai,verb,,1,2
+megetenai,nai,verb,,1,2
+mienakute,nai,verb,,3,0
+minaide,nai,verb_naide,,1,2
+minakute,nai,verb,,3,0
+morattenai,nai,verb,,3,0
+morawanai,nai,verb,,3,0
+morawanakya,exclude,obligation,must X,3,0
+motenai,nai,verb,,3,0
+mottainai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,2,1
+mottenakatta,nai,verb,,2,1
+naosanakya,exclude,obligation,must X,2,1
+naranakya,exclude,obligation,must X,3,0
+narenai,nai,verb,,2,1
+nobasanakya,exclude,obligation,must X,3,0
+nobinai,nai,verb,,2,1
+noboranai,nai,verb,,3,0
+noboranaide,nai,verb_naide,,3,0
+nokkaranai,nai,verb,,3,0
+nuganaide,nai,verb_naide,,3,0
+nuganakute,nai,verb,,3,0
+nuranakute,nai,verb,,3,0
+nurenakatta,nai,verb,,2,1
+oishiku nai,nai,adjective,,0,3
+okinai,nai,verb,,3,0
+owaranai,nai,verb,,3,0
+sasenai,nai,verb,,1,2
+sawarasenai,nai,verb,,3,0
+shabennai,nai,verb_colloquial,,3,0
+shimawanaide,nai,verb_naide,,1,2
+shimenai,nai,verb,,1,2
+shooganakute,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,3,0
+suitenai,nai,verb,,0,3
+sukunakatta,exclude,not_negative,not negation (lexical -nai or -naide ending),2,1
+susumanai,nai,verb,,3,0
+taosanai,nai,verb,,2,1
+tatakanai,nai,verb,,3,0
+tatakanaide,nai,verb_naide,,3,0
+tatakanakute,nai,verb,,3,0
+tatenai,nai,verb,,3,0
+tobenai,nai,verb,,3,0
+tokenai,nai,verb,,3,0
+toranakatta,nai,verb,,2,1
+toriagenai,nai,verb,,3,0
+tsuburenai,nai,verb,,1,2
+tsukaenai,nai,verb,,3,0
+tsukaretenai,nai,verb,,1,2
+tsukawanaide,nai,verb_naide,,2,1
+tsumaranai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,3,0
+utanakatta,nai,verb,,2,1
+utawanakatta,nai,verb,,2,1
+waitenai,nai,verb,,0,3
+warattenaide,nai,verb_naide,,3,0
+wasurenai,nai,verb,,2,1
+yaburetenai,nai,verb,,0,3
+yakanakute,nai,verb,,2,1
+yanai,nai,copula,,3,0
+yattenai,nai,verb,,1,2
+yomanakatta,nai,verb,,3,0
+yuwanakute,nai,verb,,2,1
+yuwarenakatta,nai,verb,,2,1
+agaranai,nai,verb,,2,0
+agattenai,nai,verb,,0,2
+agenakya,exclude,obligation,must X,2,0
+agetenai,nai,verb,,2,0
+akerenai,nai,verb,,2,0
+annai,exclude,not_negative,not negation (lexical -nai or -naide ending),1,1
+arukanai,nai,verb,,2,0
+attamaranakatta,nai,verb,,0,2
+butsukaranaide,nai,verb_naide,,2,0
+butsukaranakatta,nai,verb,,0,2
+chigiranaide,nai,verb_naide,,2,0
+demasen,outside,polite_masen,polite -masen negative,1,1
+fukanakute,nai,verb,,2,0
+haetenai,nai,verb,,2,0
+hagasenai,nai,verb,,2,0
+hainnakatta,nai,verb_colloquial,,2,0
+hairimasen,outside,polite_masen,polite -masen negative,0,2
+hajimaranai,nai,verb,,2,0
+hakanakatta,nai,verb,,1,1
+hakanakya,exclude,obligation,must X,2,0
+hakobenai,nai,verb,,1,1
+hakondenai,nai,verb,,1,1
+haranakute,nai,verb,,2,0
+hazuretenai,nai,verb,,0,2
+hazusanaide,nai,verb_naide,,2,0
+hosanai,nai,verb,,2,0
+hosenai,nai,verb,,2,0
+huhnai,nai,verb,"unclear form/typo, counted by -nai ending",0,2
+ijittenai,nai,verb,,2,0
+irassharanai,nai,verb,,2,0
+irenakatta,nai,verb,,1,1
+ittenakatta,nai,verb,,1,1
+iyagaranai,nai,verb,,1,1
+jaarimasen,outside,polite_masen,polite -masen negative,2,0
+kaerenai,nai,verb,,2,0
+kakanaide,nai,verb_naide,,2,0
+kakanakute,nai,verb,,2,0
+kakenakute,nai,verb,,2,0
+kakerarenai,nai,verb,,2,0
+kakerenai,nai,verb,,2,0
+kakurenai,nai,verb,,2,0
+kakusanai,nai,verb,,2,0
+kamaimasen,outside,polite_masen,polite -masen negative,2,0
+kamanakya,exclude,obligation,must X,2,0
+kamawanai,nai,verb,,1,1
+kigaenakya,exclude,obligation,must X,2,0
+kikanakute,nai,verb,,2,0
+kikanakya,exclude,obligation,must X,2,0
+kikarenai,nai,verb,,2,0
+kimattenai,nai,verb,,2,0
+kiranakya,exclude,obligation,must X,2,0
+konakucha,exclude,obligation,must X,2,0
+korenai,nai,verb,,1,1
+korenakatta,nai,verb,,2,0
+koshikakenaide,nai,verb_naide,,2,0
+kosuranai,nai,verb,,2,0
+kowasanakute,nai,verb,,2,0
+kuremasen,outside,polite_masen,polite -masen negative,0,2
+kurenakya,exclude,obligation,must X,2,0
+kuttsukenakya,exclude,obligation,must X,2,0
+matterarenai,nai,verb,,2,0
+megenai,nai,verb,,0,2
+mesanai,nai,verb,,2,0
+miemasen,outside,polite_masen,polite -masen negative,2,0
+mirarenai,nai,verb,,1,1
+mitenakatta,nai,verb,,2,0
+mitsukaranai,nai,verb,,1,1
+mitsuketenai,nai,verb,,0,2
+morawanakatta,nai,verb,,2,0
+motanai,nai,verb,,2,0
+mukenai,nai,verb,,2,0
+nagenakute,nai,verb,,2,0
+naitenakatta,nai,verb,,1,1
+nakanakute,nai,verb,,2,0
+namenai,nai,verb,,1,1
+nannai,nai,verb_colloquial,,1,1
+naranakatta,nai,verb,,1,1
+narimasen,outside,polite_masen,polite -masen negative,2,0
+nemutakunai,nai,adjective,,0,2
+nenaide,nai,verb_naide,,2,0
+nenakatta,nai,verb,,2,0
+nenakya,exclude,obligation,must X,2,0
+nerarenai,nai,verb,,2,0
+nigenai,nai,verb,,1,1
+nigenaide,nai,verb_naide,,2,0
+nigenakute,nai,verb,,0,2
+noborenai,nai,verb,,2,0
+nokanai,nai,verb,,1,1
+nomanaide,nai,verb_naide,,1,1
+nomanakute,nai,verb,,2,0
+nomanakya,exclude,obligation,must X,1,1
+nomimasen,outside,polite_masen,polite -masen negative,2,0
+nondenakatta,nai,verb,,1,1
+noremasen,outside,polite_masen,polite -masen negative,1,1
+norenakatta,nai,verb,,2,0
+nosenakya,exclude,obligation,must X,2,0
+nuenai,nai,verb,,2,0
+nukenai,nai,verb,,2,0
+nurasanai,nai,verb,,2,0
+oboenakute,nai,verb,,2,0
+oborenai,nai,verb,,2,0
+ochinaide,nai,verb_naide,,0,2
+okanakucha,exclude,obligation,must X,2,0
+okenai,nai,verb,,1,1
+okinaide,nai,verb_naide,,2,0
+okkotosanaide,nai,verb_naide,,2,0
+okottenai,nai,verb,,0,2
+omoitsukanai,nai,verb,,2,0
+oranaide,nai,verb_naide,,2,0
+oranakatta,nai,verb,,0,2
+orenai,nai,verb,,1,1
+orimasen,outside,polite_masen,polite -masen negative,1,1
+ottenai,nai,verb,,0,2
+owattenai,nai,verb,,2,0
+oyoganai,nai,verb,,1,1
+oyoganaide,nai,verb_naide,,0,2
+saitenai,nai,verb,,2,0
+sasanai,nai,verb,,2,0
+shabennakatta,nai,verb_colloquial,,2,0
+shaberimasen,outside,polite_masen,polite -masen negative,2,0
+shiitenai,nai,verb,,1,1
+shimawanakute,nai,verb,,2,0
+shimawanakya,exclude,obligation,must X,2,0
+shimenaide,nai,verb_naide,,2,0
+shimenakute,nai,verb,,2,0
+shimenakya,exclude,obligation,must X,2,0
+shimerarenai,nai,verb,,2,0
+shimettenai,nai,verb,,2,0
+shitenaide,nai,verb_naide,,2,0
+shittenai,nai,verb,,0,2
+sutenai,nai,verb,,2,0
+suwaranakatta,nai,verb,,1,1
+suwarenai,nai,verb,,2,0
+tannai,nai,verb_colloquial,,2,0
+tanomanakatta,nai,verb,,2,0
+taranai,nai,verb,,2,0
+toketenai,nai,verb,,0,2
+tomattenai,nai,verb,,0,2
+tomerarenai,nai,verb,,2,0
+toottenai,nai,verb,,0,2
+toranaide,nai,verb_naide,,1,1
+toranakya,exclude,obligation,must X,2,0
+toremasen,outside,polite_masen,polite -masen negative,1,1
+tottenai,nai,verb,,1,1
+tsubusanai,nai,verb,,2,0
+tsuitenakatta,nai,verb,,2,0
+tsukanaide,nai,verb_naide,,2,0
+tsukuranakatta,nai,verb,,1,1
+tsukuttenakatta,nai,verb,,2,0
+uenakatta,nai,verb,,1,1
+ugokasanai,nai,verb,,2,0
+ugokasenai,nai,verb,,2,0
+ukenakya,exclude,obligation,must X,2,0
+umanai,nai,verb,,1,1
+umanakatta,nai,verb,,1,1
+utattenai,nai,verb,,0,2
+utawanakute,nai,verb,,0,2
+uttenai,nai,verb,,2,0
+wakaranakute,nai,verb,,1,1
+warawanai,nai,verb,,2,0
+warenai,nai,verb,,1,1
+warukunai,nai,adjective,,0,2
+yakanakya,exclude,obligation,must X,2,0
+yakenakatta,nai,verb,,1,1
+yaketenai,nai,verb,,1,1
+yaranakya,exclude,obligation,must X,2,0
+yogoretenai,nai,verb,,2,0
+abunaiabunai,exclude,not_negative,not negation (lexical -nai or -naide ending),1,0
+abunakunai,nai,adjective,,0,1
+agenaide,nai,verb_naide,,1,0
+agenakute,nai,verb,,1,0
+akakunai,nai,adjective,,1,0
+aketenai,nai,verb,,1,0
+akinai,nai,verb,,1,0
+amanakya,exclude,obligation,must X,1,0
+arattenai,nai,verb,,1,0
+arawanakatta,nai,verb,,1,0
+arawanakucha,exclude,obligation,must X,1,0
+arawashimasen,outside,polite_masen,polite -masen negative,1,0
+asobanaide,nai,verb_naide,,1,0
+asondenai,nai,verb,,1,0
+asondenaide,nai,verb_naide,,1,0
+atattenakute,nai,verb,,1,0
+atsukawanai,nai,verb,,1,0
+attamaranakya,exclude,obligation,must X,1,0
+awanai,nai,verb,,1,0
+awanakatta,nai,verb,,1,0
+awasanakya,exclude,obligation,must X,1,0
+awatenaide,nai,verb_naide,,1,0
+awatenakute,nai,verb,,1,0
+butsukaranai,nai,verb,,1,0
+charanai,nai,verb,"unclear form/typo, counted by -nai ending",0,1
+chikazukanaide,nai,verb_naide,,1,0
+chinai,nai,verb,"unclear form/typo, counted by -nai ending",0,1
+chiranai,nai,verb,,0,1
+damasenai,nai,verb,,1,0
+damattenaide,nai,verb_naide,,1,0
+damattenakya,exclude,obligation,must X,0,1
+dasanakya,exclude,obligation,must X,1,0
+dashitenakatta,nai,verb,,1,0
+dekirarenai,nai,verb,,0,1
+denakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',1,0
+detemasen,outside,polite_masen,polite -masen negative,1,0
+dewanakute,nai,copula,,1,0
+fukanaide,nai,verb_naide,,1,0
+fukanakatta,nai,verb,,0,1
+fukurashitenai,nai,verb,,1,0
+furanakatta,nai,verb,,0,1
+furenai,nai,verb,,1,0
+furunai,nai,verb,"unclear form/typo, counted by -nai ending",0,1
+futottenai,nai,verb,,1,0
+futtemasen,outside,polite_masen,polite -masen negative,0,1
+futtenakatta,nai,verb,,1,0
+fuzaketenaide,nai,verb_naide,,1,0
+guzuranakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',1,0
+hagetenai,nai,verb,,1,0
+hairanakatta,nai,verb,,1,0
+hairanakute,nai,verb,,1,0
+haittemasen,outside,polite_masen,polite -masen negative,1,0
+hajimattenai,nai,verb,,1,0
+hakanakucha,exclude,obligation,must X,1,0
+hakaranai,nai,verb,,1,0
+hakaranakute,nai,verb,,1,0
+hakarenai,nai,verb,,1,0
+hakattenakatta,nai,verb,,1,0
+hamenakya,exclude,obligation,must X,1,0
+hanasanakute,nai,verb,,1,0
+hanasanakya,exclude,obligation,must X,1,0
+hanasenai,nai,verb,,1,0
+hanashitenai,nai,verb,,1,0
+haranai,nai,verb,,1,0
+haranakatta,nai,verb,,0,1
+harawanakute,nai,verb,,1,0
+harawanakya,exclude,obligation,must X,1,0
+haretenai,nai,verb,,1,0
+hasamanai,nai,verb,,1,0
+hasamanaide,nai,verb_naide,,1,0
+hasamenai,nai,verb,,1,0
+hashiranaide,nai,verb_naide,,1,0
+hashirasenakatta,nai,verb,,1,0
+hashirimawaranaide,nai,verb_naide,,1,0
+hashittenai,nai,verb,,1,0
+hazurenai,nai,verb,,1,0
+hazusanai,nai,verb,,1,0
+hazusanakya,exclude,obligation,must X,1,0
+hikanai,nai,verb,,0,1
+hikanaide,nai,verb_naide,,1,0
+hikaretenai,nai,verb,,0,1
+hikkakenai,nai,verb,,1,0
+hikkurikaesanaide,nai,verb_naide,,1,0
+hippannai,nai,verb_colloquial,,1,0
+hirogenaide,nai,verb_naide,,1,0
+hirogenakya,exclude,obligation,must X,1,0
+hiyasanakya,exclude,obligation,must X,0,1
+hodoketenai,nai,verb,,0,1
+hosanakute,nai,verb,,1,0
+hoshigaranakatta,nai,verb,,1,0
+hottenai,nai,verb,,0,1
+iemasen,outside,polite_masen,polite -masen negative,1,0
+ienakatta,nai,verb,,1,0
+ietenakatta,nai,verb,,1,0
+iimasen,outside,polite_masen,polite -masen negative,1,0
+ijimenai,nai,verb,,1,0
+ijimenaide,nai,verb_naide,,1,0
+ijinnai,nai,verb_colloquial,,1,0
+ijittenaide,nai,verb_naide,,1,0
+ikasenai,nai,verb,,1,0
+ikimasen,outside,polite_masen,polite -masen negative,1,0
+inaiinaiinai,exclude,baby_talk,nainai = put away; inai inai baa = peekaboo,1,0
+inaiinainai,exclude,baby_talk,nainai = put away; inai inai baa = peekaboo,1,0
+inakucha,exclude,obligation,must X,1,0
+inakute,nai,verb,,1,0
+iranakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',0,1
+iranakute,nai,verb,,0,1
+irarenai,nai,verb,,1,0
+itainai,nai,verb,"unclear form/typo, counted by -nai ending",1,0
+itandenai,nai,verb,,0,1
+itenai,nai,verb,,0,1
+ittenaide,nai,verb_naide,,1,0
+iwanakucha,exclude,obligation,must X,1,0
+iyada,iya,iya,,0,1
+iyaiya,iya,iya,,0,1
+kaburanai,nai,verb,,1,0
+kaburanakatta,nai,verb,,0,1
+kaemasen,outside,polite_masen,polite -masen negative,1,0
+kaenakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',0,1
+kaenakya,exclude,obligation,must X,1,0
+kaeranakute,nai,verb,,0,1
+kaerarenai,nai,verb,,1,0
+kaeremasen,outside,polite_masen,polite -masen negative,1,0
+kaitenakatta,nai,verb,,1,0
+kajiranaide,nai,verb_naide,,1,0
+kakanakatta,nai,verb,,0,1
+kakemasen,outside,polite_masen,polite -masen negative,1,0
+kakenaide,nai,verb_naide,,1,0
+kakenakatta,nai,verb,,1,0
+kakenakya,exclude,obligation,must X,1,0
+kakimawasanaide,nai,verb_naide,,1,0
+kakurenakya,exclude,obligation,must X,1,0
+kakusanaide,nai,verb_naide,,1,0
+kamanaide,nai,verb_naide,,1,0
+kamanakute,nai,verb,,1,0
+kamaretenai,nai,verb,,1,0
+kamitsukanaide,nai,verb_naide,,1,0
+kamoshiremasen,exclude,fixed_expression,'maybe',1,0
+kasanai,nai,verb,,0,1
+katazuitenai,nai,verb,,1,0
+katazukanai,nai,verb,,1,0
+katazukenaide,nai,verb_naide,,1,0
+katazuketenakatta,nai,verb,,1,0
+kattenakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',1,0
+kawanaide,nai,verb_naide,,1,0
+kawanakatta,nai,verb,,0,1
+kawannai,nai,verb_colloquial,,1,0
+kazoekirenai,nai,verb,,1,0
+kazoenai,nai,verb,,0,1
+keranakya,exclude,obligation,must X,1,0
+kesanai,nai,verb,,1,0
+keshitenai,nai,verb,,1,0
+kezuranai,nai,verb,,1,0
+kichanai,exclude,not_negative,not negation (lexical -nai or -naide ending),0,1
+kiitenakute,nai,verb,,1,0
+kimasen,outside,polite_masen,polite -masen negative,1,0
+kinakatta,nai,verb,,1,0
+kinakucha,exclude,obligation,must X,1,0
+kiranaide,nai,verb_naide,,1,0
+kiremasen,outside,polite_masen,polite -masen negative,1,0
+kishanai,nai,verb,"unclear form/typo, counted by -nai ending",0,1
+kittenai,nai,verb,,0,1
+koborenai,nai,verb,,1,0
+koborenakatta,nai,verb,,0,1
+kobosanakatta,nai,verb,,0,1
+koboshitenakatta,nai,verb,,0,1
+kokenai,nai,verb,,0,1
+korenakute,nai,verb,,0,1
+korobanai,nai,verb,,1,0
+korobanakatta,nai,verb,,0,1
+korogasanai,nai,verb,,1,0
+kosuranaide,nai,verb_naide,,1,0
+kowagarimasen,outside,polite_masen,polite -masen negative,1,0
+kowaku nai,nai,adjective,,0,1
+kudaranai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,1,0
+kukuranaide,nai,verb_naide,,1,0
+kukurenai,nai,verb,,1,0
+kumitaterarenai,nai,verb,,1,0
+kurainai,nai,verb,"unclear form/typo, counted by -nai ending",1,0
+kurenakucha,exclude,obligation,must X,1,0
+kuttsukenai,nai,verb,,0,1
+kuttsuketenai,nai,verb,,1,0
+manai,nai,verb,"unclear form/typo, counted by -nai ending",0,1
+mabushikunai,nai,adjective,,1,0
+majinai,exclude,not_negative,not negation (lexical -nai or -naide ending),0,1
+makanai,nai,verb,,1,0
+makanaide,nai,verb_naide,,1,0
+maniawanai,nai,verb,,1,0
+maniawanakatta,nai,verb,,1,0
+matasarenakatta,nai,verb,,1,0
+matenai,nai,verb,,1,0
+mawaranai,nai,verb,,1,0
+mawarenai,nai,verb,,1,0
+mawasanaide,nai,verb_naide,,1,0
+mawasanakya,exclude,obligation,must X,1,0
+mawasenai,nai,verb,,1,0
+mazenaide,nai,verb_naide,,0,1
+mazenakute,nai,verb,,1,0
+miataranai,nai,verb,,1,0
+migakenai,nai,verb,,1,0
+mikakenai,nai,verb,,1,0
+minakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',1,0
+minarenai,nai,verb,,1,0
+misenakute,nai,verb,,1,0
+misenakya,exclude,obligation,must X,1,0
+mitenakya,exclude,obligation,must X,1,0
+mitsukenakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',1,0
+mittomonai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,0,1
+moenai,nai,verb,,1,0
+moetenai,nai,verb,,0,1
+moguranaide,nai,verb_naide,,1,0
+mooshiwakenai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,1,0
+moraenai,nai,verb,,1,0
+morawanakute,nai,verb,,1,0
+motanakute,nai,verb,,1,0
+motanakya,exclude,obligation,must X,1,0
+motasenakucha,exclude,obligation,must X,1,0
+mottekonakute,nai,verb,,1,0
+mottenakya,exclude,obligation,must X,1,0
+muitenai,nai,verb,,1,0
+mukanai,nai,verb,,1,0
+mukanakute,nai,verb,,1,0
+mukenakya,exclude,obligation,must X,1,0
+musubenai,nai,verb,,1,0
+nagarenai,nai,verb,,1,0
+nagasanai,nai,verb,,1,0
+nagasanaide,nai,verb_naide,,1,0
+nagashitenai,nai,verb,,1,0
+nagenakatta,nai,verb,,0,1
+naguranai,nai,verb,,1,0
+nainainai,exclude,baby_talk,nainai = put away; inai inai baa = peekaboo,0,1
+nakenai,nai,verb,,1,0
+nakunaranai,nai,verb,,0,1
+nakunattenai,nai,verb,,0,1
+namenakute,nai,verb,,1,0
+naoranai,nai,verb,,1,0
+naosanai,nai,verb,,1,0
+naosenai,nai,verb,,1,0
+naottenai,nai,verb,,0,1
+narabenakute,nai,verb,,1,0
+narabetenakatta,nai,verb,,0,1
+naranaide,nai,verb_naide,,1,0
+naranakucha,exclude,obligation,must X,1,0
+naranakute,nai,verb,,1,0
+narasanai,nai,verb,,1,0
+narashitenakatta,nai,verb,,1,0
+narattenai,nai,verb,,1,0
+naremasen,outside,polite_masen,polite -masen negative,1,0
+nattemasen,outside,polite_masen,polite -masen negative,1,0
+nattenaide,nai,verb_naide,,0,1
+nawadtenai,nai,verb,"unclear form/typo, counted by -nai ending",0,1
+nechawanai,nai,verb,,1,0
+nekasanaide,nai,verb_naide,,1,0
+nerenai,nai,verb,,1,0
+nigasanai,nai,verb,,1,0
+nokanakute,nai,verb,,0,1
+nokanakya,exclude,obligation,must X,0,1
+nokkaranaide,nai,verb_naide,,1,0
+nokkarenai,nai,verb,,1,0
+nokottenakatta,nai,verb,,1,0
+nomarenai,nai,verb,,1,0
+nondenai,nai,verb,,1,0
+noranakya,exclude,obligation,must X,1,0
+norimasen,outside,polite_masen,polite -masen negative,1,0
+noserarenai,nai,verb,,1,0
+nosetenai,nai,verb,,0,1
+nugenai,nai,verb,,0,1
+nukanai,nai,verb,,1,0
+nuranai,nai,verb,,0,1
+nurashitenai,nai,verb,,0,1
+nuretenakatta,nai,verb,,1,0
+nuttemasen,outside,polite_masen,polite -masen negative,1,0
+nuttenai,nai,verb,,0,1
+ochimasen,outside,polite_masen,polite -masen negative,1,0
+ochinakatta,nai,verb,,1,0
+ochitsukanai,nai,verb,,1,0
+oikosarenai,nai,verb,,1,0
+okinakatta,nai,verb,,0,1
+okitenai,nai,verb,,1,0
+okkochinaide,nai,verb_naide,,1,0
+okonnai,nai,verb_colloquial,,1,0
+okoranai,nai,verb,,1,0
+okoranakute,nai,verb,,1,0
+okosanai,nai,verb,,1,0
+omajinai,exclude,not_negative,not negation (lexical -nai or -naide ending),0,1
+omoigakenai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,1,0
+oranai,nai,verb,,1,0
+oranakya,exclude,obligation,must X,1,0
+orinakute,nai,verb,,1,0
+orinakya,exclude,obligation,must X,1,0
+orirenakatta,nai,verb,,1,0
+oritenai,nai,verb,,0,1
+orosanai,nai,verb,,1,0
+oroshitenai,nai,verb,,0,1
+osaekirenai,nai,verb,,1,0
+osaenaide,nai,verb_naide,,1,0
+osaenakya,exclude,obligation,must X,1,0
+osenai,nai,verb,,1,0
+oshietenai,nai,verb,,0,1
+oshitsukenaide,nai,verb_naide,,1,0
+otosanakute,nai,verb,,1,0
+otoshitenai,nai,verb,,0,1
+owannakute,nai,verb_colloquial,,1,0
+sagasanakya,exclude,obligation,must X,1,0
+samukunai,nai,adjective,,0,1
+sashikomanaide,nai,verb_naide,,1,0
+sawannakute,nai,verb_colloquial,,1,0
+sawaranakute,nai,verb,,1,0
+sawattenai,nai,verb,,1,0
+shaberasenakya,exclude,obligation,must X,1,0
+shabettemasen,outside,polite_masen,polite -masen negative,1,0
+shabettenai,nai,verb,,1,0
+shibirenai,nai,verb,,0,1
+shibiretenai,nai,verb,,0,1
+shikanai,exclude,shika_nai,shika … nai 'only' (fused),1,0
+shiketenai,nai,verb,,1,0
+shimanaide,nai,verb_naide,,1,0
+shimenakatta,nai,verb,,0,1
+shimenakucha,exclude,obligation,must X,1,0
+shimerenai,nai,verb,,0,1
+shinakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',0,1
+shinaosanaide,nai,verb_naide,,1,0
+shindenakatta,nai,verb,,1,0
+shiranaide,nai,verb_naide,,1,0
+shitenakatta,nai,verb,,1,0
+shitenakya,exclude,obligation,must X,1,0
+shiterarenai,nai,verb,,1,0
+sorowanakya,exclude,obligation,must X,1,0
+suberanai,nai,verb,,1,0
+suberanakatta,nai,verb,,0,1
+suenakute,nai,verb,,1,0
+sukanai,nai,verb,,1,0
+sumimasendeshita,outside,apology_masen,apology; polite -masen form,1,0
+sundenai,nai,verb,,1,0
+susumimasen,outside,polite_masen,polite -masen negative,1,0
+sutechawanai,nai,verb,,1,0
+sutetenai,nai,verb,,1,0
+suwaranai,nai,verb,,1,0
+suwaranaide,nai,verb_naide,,0,1
+suwaranakute,nai,verb,,1,0
+tabemasen,outside,polite_masen,polite -masen negative,1,0
+tabenakute,nai,verb,,1,0
+taberaremasen,outside,polite_masen,polite -masen negative,1,0
+taberemasen,outside,polite_masen,polite -masen negative,0,1
+tachiagaranaide,nai,verb_naide,,1,0
+taigikunai,nai,adjective,,0,1
+takahamasen,outside,polite_masen,polite -masen negative,1,0
+takenai,nai,verb,,1,0
+tamarimasen,outside,polite_masen,polite -masen negative,1,0
+tanomanai,nai,verb,,1,0
+tarasanaide,nai,verb_naide,,1,0
+tarebanai,nai,verb,"unclear form/typo, counted by -nai ending",1,0
+tarinakya,exclude,obligation,must X,1,0
+tatanai,nai,verb,,1,0
+tatenaide,nai,verb_naide,,1,0
+tattenaide,nai,verb_naide,,1,0
+tattenakatta,nai,verb,,1,0
+teranai,nai,verb,,1,0
+tobanai,nai,verb,,1,0
+tobiagaranakute,nai,verb,,1,0
+tobiorinakute,nai,verb,,1,0
+tobitatanai,nai,verb,,1,0
+todokimasen,outside,polite_masen,polite -masen negative,1,0
+tokanai,nai,verb,,1,0
+tokasenai,nai,verb,,1,0
+tomannai,nai,verb_colloquial,,1,0
+tomarimasen,outside,polite_masen,polite -masen negative,0,1
+tomenaide,nai,verb_naide,,1,0
+tomenakya,exclude,obligation,must X,1,0
+tondemonai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,0,1
+tooranai,nai,verb,,1,0
+tooranakatta,nai,verb,,1,0
+toorashimasen,outside,polite_masen,polite -masen negative,0,1
+toorimasen,outside,polite_masen,polite -masen negative,1,0
+toriagenakute,nai,verb,,1,0
+totchawanai,nai,verb,,1,0
+tottenakatta,nai,verb,,1,0
+tsubusanaide,nai,verb_naide,,1,0
+tsubuttenakya,exclude,obligation,must X,1,0
+tsukaimasen,outside,polite_masen,polite -masen negative,1,0
+tsukamaenaide,nai,verb_naide,,1,0
+tsukamattenai,nai,verb,,1,0
+tsukattenai,nai,verb,,1,0
+tsukawanakute,nai,verb,,1,0
+tsukenaide,nai,verb_naide,,1,0
+tsukesasanai,nai,verb,,1,0
+tsukkomanaide,nai,verb_naide,,1,0
+tsukuranakucha,exclude,obligation,must X,1,0
+tsukuranakya,exclude,obligation,must X,1,0
+tsukuttenai,nai,verb,,0,1
+tsumannai,exclude,fixed_expression,fixed expression; parallels 说不定/不得了 exclusions,1,0
+tsunaganai,nai,verb,,1,0
+tsunaganakya,exclude,obligation,must X,1,0
+tsurushitenai,nai,verb,,0,1
+tsutsumenai,nai,verb,,1,0
+tsuzuitenai,nai,verb,,1,0
+tsuzukanai,nai,verb,,1,0
+tukanai,nai,verb,,0,1
+uenakute,nai,verb,,1,0
+ugokanaide,nai,verb_naide,,1,0
+ugokanakute,nai,verb,,1,0
+ugokasemasen,outside,polite_masen,polite -masen negative,1,0
+ugokimasen,outside,polite_masen,polite -masen negative,1,0
+uketoranakatta,nai,verb,,1,0
+umimasen,outside,polite_masen,polite -masen negative,1,0
+uranai,nai,verb,,1,0
+utenakatta,nai,verb,,1,0
+utsuttenakatta,nai,verb,,1,0
+uutenakute,nai,verb,"unclear form/typo, counted by -nai ending",0,1
+wakannakatta,nai,verb_colloquial,,1,0
+wakasanakute,nai,verb,,1,0
+wakattenai,nai,verb,,0,1
+warawanakatta,nai,verb,,1,0
+warenakatta,nai,verb,,1,0
+wasurenaide,nai,verb_naide,,0,1
+wasureraremasen,outside,polite_masen,polite -masen negative,1,0
+wasuretenai,nai,verb,,0,1
+watasanai,nai,verb,,1,0
+wataserarenai,nai,verb,,1,0
+yaburetenakatta,nai,verb,,1,0
+yaitenai,nai,verb,,0,1
+yakanakatta,nai,verb,,1,0
+yamanai,nai,verb,,0,1
+yannaide,nai,verb_naide,,1,0
+yannakya,exclude,obligation,must X,1,0
+yaranakereba,exclude,obligation,must X; -nakereba can be conditional 'if not',1,0
+yaranakucha,exclude,obligation,must X,1,0
+yasumanai,nai,verb,,0,1
+yogorenai,nai,verb,,1,0
+yokenakatta,nai,verb,,1,0
+yomanakute,nai,verb,,1,0
+yomanakya,exclude,obligation,must X,1,0
+yondenakatta,nai,verb,,1,0
+yorokobanai,nai,verb,,1,0
+yubisasanakya,exclude,obligation,must X,1,0
+yuremasen,outside,polite_masen,polite -masen negative,1,0
+yuretenai,nai,verb,,1,0
+yuttenakatta,nai,verb,,1,0
+yuutenai,nai,verb,,0,1
+yuutenakatta,nai,verb,,0,1
+yuwasenakatta,nai,verb,,0,1
+zurenai,nai,verb,,1,0
+ない,nai,standalone,hiragana,0,0
+ナイ,nai,standalone,katakana,0,0
+いや,iya,iya,hiragana,0,0
+イヤ,iya,iya,katakana,0,0
+いやだ,iya,iya,hiragana,0,0
+やだ,iya,iya,hiragana,0,0
+いやいや,iya,iya,hiragana,0,0
+nandemonai,exclude,fixed_expression,nan demo nai 'it's nothing' (fused),0,0
+nakucha,exclude,obligation,must,0,0

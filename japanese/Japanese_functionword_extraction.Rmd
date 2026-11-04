@@ -5,13 +5,13 @@ date: "`r Sys.Date()`"
 output: pdf_document
 ---
 
-# How to Use This File
+# Overview
 
-Runs the Japanese extraction from CHILDES token import through negation coding to the processed Feather export. Set the working directory to `japanese`, install `childesr`, `tidyverse`, and `arrow`, then run chunks in order. Matching raw caches are reused unless `japanese_force_download` is `TRUE`; the final file is `japanese_data/processed_data/japanese_tokens_processed.feather`.
+Runs the Japanese extraction from CHILDES tokens through negation coding to `japanese_data/processed_data/japanese_tokens_processed.feather`. Uses `japanese` as the working directory with `childesr`, `tidyverse`, and `arrow`, requires `japanese_neg_lexicon.csv`, and reuses corpus caches unless `japanese_force_download` is `TRUE`.
 
 # Setup
 
-Loads the packages, sets knitr options, and creates relative raw and processed data directories.
+Loads `childesr`, `tidyverse`, and `arrow`, configures knitr, and creates `japanese_raw_dir` and `japanese_processed_dir`.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -33,163 +33,180 @@ japanese_data_root <- "japanese_data"
 japanese_raw_dir <- file.path(japanese_data_root, "raw_data")
 japanese_processed_dir <- file.path(japanese_data_root, "processed_data")
 
+# Hand-coded list of negation word forms (see the Negation rule document).
+japanese_lexicon_path <- "japanese_neg_lexicon.csv"
+
 dir.create(japanese_raw_dir, showWarnings = FALSE, recursive = TRUE)
 dir.create(japanese_processed_dir, showWarnings = FALSE, recursive = TRUE)
 ```
 
 # Load Data
 
-Loads the selected Japanese corpora from CHILDES release 2026.1 or matching local caches. Validates the imported columns and cache source record before token processing.
+Selects CHILDES source corpora and imports tokens into `japanese_all_tokens` for annotation.
+
+## Select Corpora
+
+Selects the Japanese collection in `japanese_target_collection` for CHILDES release `japanese_db_version`.
 
 ```{r collections}
 japanese_target_collection <- "Japanese"
 ```
 
-## Import Tokens
+## Import Data
 
-Loads a matching raw cache or requests tokens for the selected corpus or collection. Validates columns and row counts, then saves new raw data with its query source record.
+Downloads or reuses corpus-level Japanese tokens in `japanese_all_tokens` and checks required columns and combined batch row counts.
 
 ```{r import_tokens}
-# Only use caches belonging to the pinned release and the same query.
-japanese_feather_path <- file.path(japanese_raw_dir, "all_japanese_tokens.feather")
-japanese_csv_path <- file.path(japanese_raw_dir, "all_japanese_tokens.csv")
-japanese_source_info_path <- file.path(japanese_raw_dir, "all_japanese_tokens_source.rds")
-
-japanese_query_roles <- c("Target_Child", "Mother", "Father")
-
-japanese_query_info <- list(
-  db_version = japanese_db_version,
-  collection = sort(japanese_target_collection),
-  role = sort(japanese_query_roles),
-  token = "%",
-  replace = TRUE
+# One folder for this DB version and query (all speakers, all tokens),
+# one Feather file per corpus.
+japanese_batch_dir <- file.path(
+  japanese_raw_dir,
+  paste0("corpus_batches_", japanese_db_version, "_all_speakers")
 )
 
-japanese_cache_info <- if (file.exists(japanese_source_info_path)) {
-  tryCatch(readRDS(japanese_source_info_path), error = function(e) NULL)
+japanese_corpora_path <- file.path(japanese_batch_dir, "corpus_list.csv")
+dir.create(japanese_batch_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Corpus list for the collection: fetched once, then reused from disk.
+if (!japanese_force_download && file.exists(japanese_corpora_path)) {
+  japanese_corpora_names <- readr::read_csv(
+    japanese_corpora_path, show_col_types = FALSE
+  )$corpus_name
 } else {
-  NULL
-}
-
-japanese_cache_matches <- is.list(japanese_cache_info) &&
-  identical(japanese_cache_info$query, japanese_query_info)
-
-japanese_loaded_from_cache <- FALSE
-
-if (!japanese_force_download && japanese_cache_matches && file.exists(japanese_feather_path)) {
-
-  cat(sprintf(
-    "Loading verified childes-db %s Feather cache...\n",
-    japanese_db_version
-  ))
-
-  japanese_all_tokens <- arrow::read_feather(japanese_feather_path)
-  japanese_loaded_from_cache <- TRUE
-
-} else if (!japanese_force_download && japanese_cache_matches && file.exists(japanese_csv_path)) {
-
-  cat(sprintf(
-    "Loading verified childes-db %s CSV cache...\n",
-    japanese_db_version
-  ))
-
-  japanese_all_tokens <- readr::read_csv(
-    japanese_csv_path,
-    show_col_types = FALSE
-  )
-
-  japanese_loaded_from_cache <- TRUE
-
-} else {
-
-  cat(sprintf(
-    "Downloading Japanese tokens from childes-db %s...\n",
-    japanese_db_version
-  ))
-
-  japanese_all_tokens <- childesr::get_tokens(
-    collection = japanese_target_collection,
-    role = japanese_query_roles,
-    token = "%",
-    replace = TRUE,
-    db_version = japanese_db_version
+  japanese_corpora_names <- childesr::get_corpora(db_version = japanese_db_version) %>%
+    dplyr::filter(collection_name %in% japanese_target_collection) %>%
+    dplyr::pull(corpus_name) %>%
+    unique() %>%
+    sort()
+  if (length(japanese_corpora_names) == 0L) {
+    stop("No corpora found for collection: ", japanese_target_collection)
+  }
+  readr::write_csv(
+    tibble::tibble(corpus_name = japanese_corpora_names),
+    japanese_corpora_path
   )
 }
 
-# Avoid saving an empty/failed download.
-if (is.null(japanese_all_tokens) || nrow(japanese_all_tokens) == 0L) {
-  stop(
-    "No tokens returned. Check the query messages and collection name; ",
-    "no cache was saved."
-  )
-}
+japanese_batch_files <- file.path(
+  japanese_batch_dir,
+  paste0(str_replace_all(japanese_corpora_names, "[^A-Za-z0-9_-]", "_"), ".feather")
+)
 
-# Check that the expected columns are available.
+# Columns every corpus file must have.
 japanese_required_columns <- c(
   "target_child_id", "target_child_age", "transcript_id", "utterance_id",
   "token_order", "gloss", "part_of_speech", "speaker_role",
   "speaker_code", "utterance_type"
 )
 
-japanese_missing_columns <- setdiff(
-  japanese_required_columns,
-  names(japanese_all_tokens)
+# A saved batch is usable if the file exists and has the required columns.
+japanese_batch_is_valid <- function(path) {
+  if (!file.exists(path)) return(FALSE)
+  saved_columns <- names(arrow::open_dataset(path, format = "ipc"))
+  all(japanese_required_columns %in% saved_columns)
+}
+
+# Write to a temporary file first, then rename it.
+# If R stops mid-write, no half-written batch is left behind.
+japanese_save_batch <- function(data, path) {
+  temp_path <- paste0(path, ".tmp")
+  arrow::write_feather(data, temp_path)
+  if (!file.rename(temp_path, path)) stop("Could not save: ", path)
+}
+
+japanese_download_status <- tibble::tibble(
+  corpus_name = japanese_corpora_names,
+  status = "pending",
+  n_tokens = NA_real_,
+  error = NA_character_
 )
 
-if (length(japanese_missing_columns) > 0L) {
+for (i in seq_along(japanese_corpora_names)) {
+  corpus_name <- japanese_corpora_names[[i]]
+  path <- japanese_batch_files[[i]]
+  message(sprintf("[%d/%d] %s", i, length(japanese_corpora_names), corpus_name))
+
+  if (!japanese_force_download && japanese_batch_is_valid(path)) {
+    # Already saved: reuse it and just count its rows.
+    japanese_download_status$status[[i]] <- "cached"
+    japanese_download_status$n_tokens[[i]] <-
+      nrow(arrow::read_feather(path, col_select = "utterance_id"))
+
+  } else {
+    # Not saved yet: download all speakers (no role argument).
+    # tryCatch turns an error into a message so the loop moves on.
+    tokens <- tryCatch(
+      childesr::get_tokens(
+        corpus = corpus_name,
+        token = "%",
+        replace = TRUE,
+        db_version = japanese_db_version
+      ),
+      error = function(e) conditionMessage(e)
+    )
+
+    if (is.character(tokens)) {
+      # Download failed: tokens holds the error message.
+      japanese_download_status$status[[i]] <- "failed"
+      japanese_download_status$error[[i]] <- tokens
+      message("  FAILED: ", tokens)
+    } else if (is.null(tokens) || nrow(tokens) == 0L) {
+      # Nothing returned: nothing to save, not counted as a failure.
+      japanese_download_status$status[[i]] <- "empty"
+      japanese_download_status$n_tokens[[i]] <- 0
+      message("  No tokens returned.")
+    } else if (!all(japanese_required_columns %in% names(tokens))) {
+      japanese_download_status$status[[i]] <- "failed"
+      japanese_download_status$error[[i]] <- paste(
+        "Missing columns:",
+        paste(setdiff(japanese_required_columns, names(tokens)), collapse = ", ")
+      )
+      message("  FAILED: ", japanese_download_status$error[[i]])
+    } else {
+      japanese_save_batch(tokens, path)
+      japanese_download_status$status[[i]] <- "downloaded"
+      japanese_download_status$n_tokens[[i]] <- nrow(tokens)
+      message("  Saved ", nrow(tokens), " tokens.")
+    }
+  }
+}
+
+if (any(japanese_download_status$status == "failed")) {
   stop(
-    "Required columns missing: ",
-    paste(japanese_missing_columns, collapse = ", ")
+    "Some corpora failed. Completed batches remain saved. ",
+    "Keep japanese_force_download <- FALSE and rerun this chunk."
   )
 }
 
-# Confirm that the cached data matches its source record.
-if (
-  japanese_loaded_from_cache &&
-  !isTRUE(nrow(japanese_all_tokens) == japanese_cache_info$row_count)
-) {
-  stop(
-    "Cache row count does not match its source record. ",
-    "Set japanese_force_download <- TRUE and rerun."
-  )
-}
+japanese_all_tokens <- japanese_batch_files[
+  japanese_download_status$status %in% c("cached", "downloaded")
+] %>%
+  purrr::map(arrow::read_feather) %>%
+  dplyr::bind_rows()
 
-if (!japanese_loaded_from_cache) {
-
-  cat("Saving the new data and its release/query information...\n")
-
-  arrow::write_feather(japanese_all_tokens, japanese_feather_path)
-  readr::write_csv(japanese_all_tokens, japanese_csv_path)
-
-  saveRDS(
-    list(
-      query = japanese_query_info,
-      downloaded_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
-      childesr_version = as.character(utils::packageVersion("childesr")),
-      row_count = nrow(japanese_all_tokens)
-    ),
-    japanese_source_info_path
-  )
-
-} else if (!file.exists(japanese_feather_path)) {
-
-  arrow::write_feather(japanese_all_tokens, japanese_feather_path)
-}
+# The combined data should have exactly as many rows as the batches.
+stopifnot(
+  nrow(japanese_all_tokens) ==
+    sum(japanese_download_status$n_tokens, na.rm = TRUE)
+)
 
 cat(sprintf(
   "Loaded %d tokens from %d children.\n",
   nrow(japanese_all_tokens),
   japanese_all_tokens$target_child_id %>% unique() %>% length()
 ))
+
+japanese_download_status %>%
+  dplyr::select(corpus_name, status, n_tokens)
 ```
 
 # Token Processing
 
-Screens target-child ages, records exclusion counts, and adds speaker, completed-month age, and utterance-type labels.
+Filters `japanese_tokens` by `target_child_age` and assigns speaker, age, and utterance-type fields before negation coding.
 
-## Exclusions
+## Filter Ages and Count Exclusions
 
-Keeps finite target-child ages from birth to under 72 months. Counts tokens and unique child IDs, including a missing ID as one distinct value, and retains observed tokens at ages 0–10.
+Filters `japanese_all_tokens` to finite `target_child_age` values from 0 to under 72 months and records row and child counts in `japanese_exclusions`.
 
 ```{r exclusions}
 japanese_n_tokens_before_exclusions <- nrow(japanese_all_tokens)
@@ -225,56 +242,50 @@ japanese_exclusions
 
 ## Save Exclusion Records
 
-Saves the exclusion summary and retained token rows as CSV files in the raw-data directory.
+Saves `japanese_exclusions` and the age-filtered `japanese_tokens` as CSV files in `japanese_raw_dir`.
 
 ```{r save_exclusions}
 readr::write_csv(
   japanese_exclusions,
   file.path(japanese_raw_dir, "exclusions_japanese_summary.csv")
 )
+# Note: this file holds the tokens KEPT after the age exclusions.
 readr::write_csv(
   japanese_tokens,
   file.path(japanese_raw_dir, "japanese_tokens_excluded.csv")
 )
 ```
 
-## Speaker Roles
+## Assign Speaker Roles
 
-Maps target-child roles to `child` and mother or father roles to `parent` after case normalization. Stops if a role is missing or unexpected.
+Maps target-child roles to `child` and other nonmissing roles to `parent` in `japanese_tokens$speaker`, leaving missing roles as `NA`.
 
 ```{r speaker_roles}
 japanese_tokens <- japanese_tokens %>%
   mutate(
-    speaker = case_when(
-      str_to_lower(as.character(speaker_role), locale = "en") == "target_child" ~ "child",
-      str_to_lower(as.character(speaker_role), locale = "en") %in%
-        c("mother", "father") ~ "parent",
-      TRUE ~ NA_character_
+    speaker = if_else(
+      str_to_lower(as.character(speaker_role), locale = "en") == "target_child",
+      "child", "parent"
     )
   )
-
-if (anyNA(japanese_tokens$speaker)) {
-  japanese_invalid_speaker_roles <- unique(as.character(japanese_tokens$speaker_role[is.na(japanese_tokens$speaker)]))
-  japanese_invalid_speaker_roles[is.na(japanese_invalid_speaker_roles)] <- "<missing>"
-  stop("Unexpected or missing speaker roles: ", paste(japanese_invalid_speaker_roles, collapse = ", "))
-}
 ```
 
-## Age
+## Calculate Age in Months
 
-Calculates completed-month age by flooring the screened target-child age.
+Calculates `japanese_tokens$age` as the floor of `target_child_age` in months.
 
 ```{r age}
 japanese_tokens$age <- japanese_tokens$target_child_age %>% floor()
 ```
 
-## Utterance Types
+## Recode Utterance Types
 
-Recodes specified question, imperative, and disrupted utterance labels; leaves unlisted labels unchanged.
+Recodes question, imperative, and disrupted labels from `utterance_type` into `japanese_tokens$utterance_type`, leaving unlisted values unchanged. Warns when any remaining label falls outside the four study categories.
 
 ```{r utterance_types}
 # Prepare the utterance_type categories for this study based on the utterance_types in childes-db
 ## Categories: declarative, imperative, interrogative, and other
+## Note: imperative_emphatic comes from the CHAT "!" terminator, which also marks exclamations.
 japanese_tokens$utterance_type <-
   recode(japanese_tokens$utterance_type,
          question = "interrogative",
@@ -292,89 +303,278 @@ japanese_tokens$utterance_type <-
          `trail off` = "other",
          `trail off question` = "interrogative"
   )
+
+japanese_unlisted_types <- setdiff(
+  unique(japanese_tokens$utterance_type),
+  c("declarative", "imperative", "interrogative", "other")
+)
+
+if (length(japanese_unlisted_types) > 0L) {
+  warning(
+    "Utterance types left unchanged: ",
+    paste(japanese_unlisted_types, collapse = ", ")
+  )
+}
 ```
 
 # Define Target Words
 
-Matches Romanized, hiragana, and katakana spellings of `nai` and `iya`, then assigns function-word labels.
+Defines `nai` and `iya` targets with `japanese_neg_lexicon.csv` and labels matching tokens. Uses hand-coded forms because the available morphology fields do not reliably identify Japanese negatives.
 
-## Candidate Spellings
+- `nai`: the negative ending *-nai* whether written alone or attached (*nai*, *shiranai*, *tabenakatta*, *shinaide*, *kowaku nai*, *janai*).
+- `iya`: *iya*, *iyada*, *yada*, *iyaiya*.
+- `outside`: negation forms outside the target set, counted but not coded (*-masen*, *dame*, *chigau*, *uun*, *iie*).
+- `exclude`: non-negating forms (*abunai*, *kamoshirenai*, *nainai*, *-nakya*, …).
 
-Defines the Romanized, hiragana, and katakana variants used for exact negator matching.
+## Load Negation Lexicon
 
-```{r candidate_spellings}
-japanese_nai_variants <- c("nai", "ない", "ナイ")
-japanese_iya_variants <- c("iya", "いや", "イヤ")
+Loads `japanese_neg_lexicon.csv` into `japanese_neg_lexicon` and validates its `form`, `target`, and `form_type` fields.
+
+```{r load_lexicon}
+japanese_normalize_gloss <- function(x) {
+  x %>%
+    as.character() %>%
+    str_to_lower(locale = "en") %>%
+    str_remove_all(":") %>%      # CHAT lengthening marks
+    str_squish()
+}
+
+japanese_neg_lexicon <- readr::read_csv(japanese_lexicon_path, show_col_types = FALSE) %>%
+  mutate(form = japanese_normalize_gloss(form))
+
+stopifnot(
+  all(c("form", "target", "form_type") %in% names(japanese_neg_lexicon)),
+  all(japanese_neg_lexicon$target %in% c("nai", "iya", "outside", "exclude")),
+  !anyDuplicated(japanese_neg_lexicon$form)
+)
+
+count(japanese_neg_lexicon, target)
 ```
 
-## Nai and Iya Matching
+## Match Target Forms
 
-Maps case-insensitive gloss matches to normalized `nai` or `iya` in `word`.
+Joins normalized token glosses to `japanese_neg_lexicon` and reports negative-looking forms missing from the lexicon in `japanese_uncoded`.
+
+```{r match_lexicon}
+japanese_n_before_join <- nrow(japanese_tokens)
+
+japanese_tokens <- japanese_tokens %>%
+  mutate(gloss_norm = japanese_normalize_gloss(gloss)) %>%
+  left_join(
+    japanese_neg_lexicon %>% select(form, lex_target = target, neg_form = form_type),
+    by = c("gloss_norm" = "form")
+  )
+
+stopifnot(nrow(japanese_tokens) == japanese_n_before_join)
+
+japanese_candidate_pattern <-
+  "(nai|nakatta|nakute|naide|nakya|nakucha|nakereba|masen|ない|ナイ)$|^(iya|yada|いや|イヤ|やだ)"
+
+japanese_uncoded <- japanese_tokens %>%
+  filter(is.na(lex_target), str_detect(gloss_norm, japanese_candidate_pattern)) %>%
+  count(gloss_norm, speaker) %>%
+  pivot_wider(names_from = speaker, values_from = n, values_fill = 0)
+
+if (nrow(japanese_uncoded) > 0L) {
+  warning(
+    nrow(japanese_uncoded),
+    " negative-looking forms are not in the lexicon and were treated as nonfunction. ",
+    "See japanese_uncoded and add them to ", japanese_lexicon_path, "."
+  )
+}
+```
+
+## Apply Context Exclusions
+
+Flags `shika ... nai`, obligation forms, `nan demo nai`, and baby-talk sequences in `japanese_tokens$context_exclusion`.
+
+```{r context_exclusions}
+japanese_obligation_pattern <- "(nakya|nakucha|nakereba)$"
+japanese_obligation_completers <- c("ikenai", "naranai", "dame", "ikemasen", "narimasen")
+
+# Gloss k positions away (k = 1 previous, k = 2 two back, k = -1 next, ...),
+# or "" when that position is outside the table or in a different utterance.
+japanese_neighbour <- function(x, utt, k) {
+  i <- seq_along(x) - k
+  ok <- i >= 1L & i <= length(x)
+  ok[ok] <- utt[i[ok]] == utt[ok]
+  out <- rep("", length(x))
+  out[ok] <- x[i[ok]]
+  out
+}
+
+japanese_tokens <- japanese_tokens %>%
+  arrange(utterance_id, token_order)
+
+japanese_tokens$context_exclusion <- local({
+  g      <- coalesce(japanese_tokens$gloss_norm, "")
+  utt    <- japanese_tokens$utterance_id
+  n      <- length(g)
+  idx    <- seq_len(n)
+  is_nai <- japanese_tokens$lex_target %in% "nai"
+
+  prev1 <- japanese_neighbour(g, utt, 1L)
+  prev2 <- japanese_neighbour(g, utt, 2L)
+  next1 <- japanese_neighbour(g, utt, -1L)
+  next2 <- japanese_neighbour(g, utt, -2L)
+
+  # Row on which each utterance starts (rows are sorted by utterance).
+  utt_start <- cummax(if_else(c(TRUE, utt[-1] != utt[-n]), idx, 0L))
+
+  # Last "shika" and last nai-type negator strictly before each row, across
+  # the whole table. A "shika" only counts if it lies in the current
+  # utterance (position >= utt_start).
+  last_shika <- c(0L, cummax(if_else(g == "shika", idx, 0L))[-n])
+  last_nai   <- c(0L, cummax(if_else(is_nai, idx, 0L))[-n])
+
+  case_when(
+    is_nai & last_shika >= utt_start & last_shika > last_nai ~
+      "shika_nai",
+    g == "nai" & ((prev1 == "demo" & prev2 == "nan") | prev1 == "nandemo") ~
+      "nan_demo_nai",
+    g %in% japanese_obligation_completers &
+      (str_detect(prev1, japanese_obligation_pattern) |
+         (prev1 == "wa" & str_detect(prev2, "nakute$"))) ~
+      "obligation",
+    is_nai & str_detect(g, "nakute$") & next1 == "wa" &
+      next2 %in% japanese_obligation_completers ~
+      "obligation",
+    g == "nai" & (prev1 == "nai" | next1 == "nai") ~
+      "baby_talk",
+    g == "inai" & (prev1 == "inai" | next1 %in% c("inai", "baa")) ~
+      "baby_talk",
+    TRUE ~ NA_character_
+  )
+})
+```
+
+## Assign Target Word Labels
+
+Assigns `nai` or `iya` to `japanese_tokens$word` for targets without context exclusions and records other reasons in `neg_exclusion_reason`.
 
 ```{r function_words}
-# Initialize word column as nonfunction
-japanese_tokens$word <- "nonfunction"
-
-# Map orthographic variants (Romanized, Hiragana, Katakana) to normalized lemmas
-japanese_tokens$word[tolower(japanese_tokens$gloss) %in% tolower(japanese_nai_variants)] <- "nai"
-japanese_tokens$word[tolower(japanese_tokens$gloss) %in% tolower(japanese_iya_variants)] <- "iya"
+japanese_tokens <- japanese_tokens %>%
+  mutate(
+    neg_exclusion_reason = case_when(
+      lex_target == "exclude" ~ paste0("lexicon: ", neg_form),
+      lex_target == "outside" ~ "outside target set",
+      lex_target %in% c("nai", "iya") & !is.na(context_exclusion) ~
+        paste0("context: ", context_exclusion),
+      TRUE ~ NA_character_
+    ),
+    word = if_else(
+      lex_target %in% c("nai", "iya") & is.na(context_exclusion),
+      lex_target,
+      "nonfunction"
+    )
+  ) %>%
+  select(-context_exclusion)
 ```
 
-## Word Categories
+## Assign Word Categories
 
-Labels matched negators `Negation` and other tokens `nonfunction`.
+Assigns `Negation` to matched targets and `nonfunction` to other rows in `japanese_tokens$word_category`.
 
 ```{r wordcategories}
 japanese_tokens$word_category <- "nonfunction"
 japanese_tokens$word_category[japanese_tokens$word %in% c("nai", "iya")] <- "Negation"
 ```
 
-## Syntactic Category
+## Assign Syntactic Categories
 
-Labels identified function words `Function` and other tokens `nonfunction`.
+Assigns `Function` to negation targets and `nonfunction` to other rows in `japanese_tokens$syncategory`.
 
 ```{r syncategory}
 japanese_tokens$syncategory <- "Function"
 japanese_tokens$syncategory[japanese_tokens$word_category == "nonfunction"] <- "nonfunction"
 ```
 
-# Negation Word Normalization
+# Classify Negation
 
-Copies matched `nai` or `iya` labels into `negation_category`; unmatched tokens receive a missing value.
+Normalizes included target labels and classifies their scope using utterance context in `japanese_tokens`.
+
+## Normalize Negation Categories
+
+Copies included `nai` and `iya` labels from `word` into `japanese_tokens$negation_category`.
 
 ```{r negation_clean}
 japanese_tokens <- japanese_tokens %>%
   mutate(
-    negation_category = case_when(
-      word == "nai" ~ "nai",
-      word == "iya" ~ "iya",
-      TRUE ~ NA_character_
-    )
-  ) %>%
-  ungroup()
+    negation_category = if_else(word %in% c("nai", "iya"), word, NA_character_)
+  )
 ```
 
-# Sentential vs. Discourse Negation
+## Assign Negation Scope
 
-Labels normalized `nai` as `sentential` and `iya` as `discourse`, leaving other tokens without a scope.
+Assigns `discourse` or `sentential` in `japanese_tokens$negation_scope` using negator position, repetitions, and surrounding particles or fillers.
+
+- **Discourse:** the negator stands alone — bare (*nai!*, *iya!*), a single negated verb or adjective (*iranai*, *kowaku nai*), *moo nai*, a repetition (*iya iya*), or *iya* followed by a new clause.
+- **Sentential:** other content comes before the negator, or anything follows it (*omocha ga nai*, *inu janai*, *nai kara*).
 
 ```{r negation_categorization}
-japanese_tokens <- japanese_tokens %>%
+japanese_final_particles <- c("no", "ne", "yo", "wa", "na", "sa", "desu")
+japanese_leading_ignorable <- c("ee", "a", "ano", "moo")
+
+japanese_assign_scope <- function(g, target, in_core) {
+  scope <- rep(NA_character_, length(g))
+  core_idx <- which(in_core)
+
+  for (i in which(!is.na(target))) {
+    before_idx <- core_idx[core_idx < i]
+    after_idx <- core_idx[core_idx > i]
+
+    if (target[i] == "iya") {
+      # iya first (or only preceded by other iya forms) is discourse,
+      # whatever follows it ("iya, kore ga ii").
+      first_or_repeat <- all(target[before_idx] %in% "iya")
+      scope[i] <- if (first_or_repeat) "discourse" else "sentential"
+    } else {
+      # nai must stand alone: nothing after it except repeats, and nothing
+      # before it except repeats or one adjective in -ku ("kowaku nai").
+      same_before <- all(g[before_idx] == g[i])
+      same_after <- all(g[after_idx] == g[i])
+      adjective_before <- length(before_idx) == 1L && g[i] == "nai" &&
+        str_detect(g[before_idx], "ku$")
+      scope[i] <- if ((same_before || adjective_before) && same_after) {
+        "discourse"
+      } else {
+        "sentential"
+      }
+    }
+  }
+  scope
+}
+
+japanese_neg_utterances <- japanese_tokens %>%
+  filter(!is.na(negation_category)) %>%
+  distinct(utterance_id)
+
+japanese_scope <- japanese_tokens %>%
+  semi_join(japanese_neg_utterances, by = "utterance_id") %>%
+  arrange(utterance_id, token_order) %>%
+  group_by(utterance_id) %>%
   mutate(
-    negation_scope = case_when(
-      is.na(negation_category) ~ NA_character_,
-      negation_category == "nai" ~ "sentential",
-      negation_category == "iya" ~ "discourse",
-      TRUE ~ "uncertain"
-    )
+    .g = coalesce(gloss_norm, ""),
+    .lead = cumall(.g %in% japanese_leading_ignorable),
+    .trail = rev(cumall(rev(.g %in% japanese_final_particles))),
+    negation_scope = japanese_assign_scope(.g, negation_category, !.lead & !.trail)
   ) %>%
-  select(-any_of("neg_type")) %>%
-  ungroup()
+  ungroup() %>%
+  select(utterance_id, token_order, negation_scope)
+
+japanese_tokens <- japanese_tokens %>%
+  select(-any_of(c("negation_scope", "utterance_negation_scope", "neg_type"))) %>%
+  left_join(japanese_scope, by = c("utterance_id", "token_order"))
+
+stopifnot(
+  nrow(japanese_tokens) == japanese_n_before_join,
+  all(!is.na(japanese_tokens$negation_scope[!is.na(japanese_tokens$negation_category)]))
+)
 ```
 
 # Save Processed Data
 
-Saves the annotated token table to `japanese_data/processed_data/japanese_tokens_processed.feather`.
+Saves `japanese_tokens` to `japanese_data/processed_data/japanese_tokens_processed.feather` for downstream counts and plots.
 
 ```{r save_processed_data}
 write_feather(

@@ -7,7 +7,7 @@ output: pdf_document
 
 # Setup
 
-Loads packages for token summaries, Bayesian modeling, and plotting, and configures knitr to stop on chunk errors.
+Loads packages for token summaries, Bayesian Gompertz fits, and plots, and sets `knitr::opts_chunk$set(error = FALSE)`. Defines `extract_negation_lag()` and `plot_negation_scope_onset()` for scope onset summaries.
 
 ```{r packages, include=FALSE}
 library(tidyverse)
@@ -23,9 +23,69 @@ library(gridExtra)
 knitr::opts_chunk$set(error = FALSE)
 ```
 
+```{r negation_onset_helpers, include=FALSE}
+extract_negation_lag <- function(
+    model, language_name, word_name, category_name) {
+
+  model_summary <- brms::fixef(model)
+
+  if (!"lag_Intercept" %in% rownames(model_summary)) {
+    stop("Cannot find lag_Intercept for ", language_name, ": ", word_name)
+  }
+
+  lag_summary <- model_summary["lag_Intercept", ]
+
+  tibble(
+    language = language_name,
+    category = category_name,
+    word = word_name,
+    Estimate = unname(lag_summary["Estimate"]),
+    Est.Error = unname(lag_summary["Est.Error"]),
+    Q2.5 = unname(lag_summary["Q2.5"]),
+    Q97.5 = unname(lag_summary["Q97.5"])
+  )
+}
+
+
+plot_negation_scope_onset <- function(onset_data, category_name) {
+
+  plot_title <- paste(
+    unique(onset_data$language),
+    category_name,
+    "Negation"
+  )
+
+  plot_data <- onset_data %>%
+    filter(category == category_name, is.finite(Estimate)) %>%
+    mutate(word = forcats::fct_reorder(word, Estimate))
+
+  if (nrow(plot_data) == 0L) {
+    return(
+      ggplot() +
+        theme_void() +
+        annotate(
+          "text", x = 0, y = 0,
+          label = "No fitted lag estimate available"
+        ) +
+        labs(title = plot_title)
+    )
+  }
+
+  ggplot(plot_data, aes(x = Estimate, y = word)) +
+    geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+    scale_x_continuous(breaks = seq(0, 72, by = 6)) +
+    coord_cartesian(xlim = c(0, 72)) +
+    labs(
+      title = plot_title,
+      x = "Fitted lag (months)",
+      y = NULL
+    ) +
+    theme_bw(base_size = 12)
+}
+```
 # Load Data
 
-Creates the English model and processed-data directories, loads the processed token table from Feather, and defines `no` and `not` as the selected word values. Later calculations use the word and scope labels already present in the table.
+Loads `english_tokens_processed` from the processed Feather file and creates `english_data_dir` and `english_model_dir`. Defines `english_negation_words`, `english_negation_forms`, and `english_negation_colors`.
 
 ```{r processedTokens}
 english_data_dir <- "../english/english_data/processed_data"
@@ -38,15 +98,14 @@ english_tokens_processed <- read_feather(
   file.path(english_data_dir, "english_tokens_processed.feather")
 )
 
-english_negation_words <- c("no", "not")
-english_negation_labels <- c("no", "not")
+english_negation_words <- c("no", "not") # Scope-model categories, with not pooling free not and n't.
+english_negation_forms <- c("no", "not", "n't")
 english_negation_colors <- c("no" = "#0072B2", "not" = "#D55E00")
-english_negation_model_names <- c("no" = "no", "not" = "not")
 ```
 
-# Computing Cumulative Relative Frequencies
+# Calculate Relative Frequencies
 
-Counts all tokens by speaker and age before building the three frequency tables. Sets child counts and denominator contributions at ages 0–10 to zero, and excludes zero-occurrence months above that baseline from word-specific cumulative series, including scope series.
+Counts processed rows by `speaker` and `age` in `english_speaker_age_totals` and defines `english_make_cumulative_frequencies()`. Sets child ages 0–10 to zero and excludes later zero-occurrence months from individual negator rates.
 
 ```{r frequency_helpers, include=FALSE}
 # Count all recorded tokens before applying word-specific exclusions.
@@ -118,9 +177,9 @@ english_make_cumulative_frequencies <- function(group_column, group_values, tabl
 }
 ```
 
-## Function vs. Content Words
+## Target Negator and Other Token Rates
 
-Calculates monthly and cumulative percentages for the processed `syncategory` values and saves the table. `Function` represents the selected target negators, while `nonfunction` contains all other retained tokens, including other linguistic function words.
+Calculates monthly `pct` and cumulative `cumulative_pct` by `syncategory` in `english_syncategory_relfreq`. Saves the table for `Function` target negators and `nonfunction` retained tokens.
 
 ```{r syncategory_relfreq}
 english_syncategory_relfreq <- english_make_cumulative_frequencies(
@@ -130,21 +189,25 @@ english_syncategory_relfreq <- english_make_cumulative_frequencies(
 saveRDS(english_syncategory_relfreq, file.path(english_data_dir, "english_syncategory_relfreq.RDS"))
 ```
 
-## Individual Function Words
+## Individual Negator Rates
 
-Calculates monthly parts per thousand for `no`, `not`, and `nonfunction` by speaker. Retains child ages 0–10 as zero baselines and accumulates each word’s counts and token totals only in later months when that word occurs.
+Calculates monthly `ppt` and cumulative `cumulative_ppt` by `word` in `english_functionword_relfreq`. Pools free `not` and `n't` under `negation_category == "not"` before counting.
 
 ```{r functionword_relfreq}
+# Word curves use the counted categories: no = no/nope/nah, not = not/n't.
+english_tokens_processed <- english_tokens_processed %>%
+  mutate(word = coalesce(negation_category, "nonfunction"))
+
 english_functionword_relfreq <- english_make_cumulative_frequencies(
-  "word", c(english_negation_words, "nonfunction"), "word"
+  "word", c("no", "not", "nonfunction"), "word"
 )
 
 saveRDS(english_functionword_relfreq, file.path(english_data_dir, "english_functionword_relfreq.RDS"))
 ```
 
-## Function Word Semantic Categories
+## Negation Category Rates
 
-Calculates monthly parts per thousand and cumulative relative frequency for `Negation` and `nonfunction` over the full speaker-age token coverage, then saves the category table.
+Calculates monthly `ppt` and cumulative `cumulative_relfreq` by `word_category` in `english_wordcategory_relfreq`. Saves the `Negation` and `nonfunction` category rates.
 
 ```{r wordcategory_relfreq}
 english_wordcategory_relfreq <- english_make_cumulative_frequencies(
@@ -154,13 +217,13 @@ english_wordcategory_relfreq <- english_make_cumulative_frequencies(
 saveRDS(english_wordcategory_relfreq, file.path(english_data_dir, "english_wordcategory_relfreq.RDS"))
 ```
 
-# Plots and Growth Curves
+# Plot and Fit Growth Curves
 
-Creates descriptive child-and-parent plots, fits Bayesian Gompertz curves to child percentages or cumulative parts per thousand, and displays observations with fitted values. Saves fitted child data and model lag estimates for later plots.
+Plots speaker-level negation rates and fits Bayesian Gompertz curves to child `pct` and `cumulative_ppt` trajectories. Produces fitted child data and lag summaries for onset comparisons.
 
-## Overall Negation Production
+## Overall Negation
 
-Plots monthly percentages for the selected `Function` tokens by speaker and fits a Gompertz curve to child percentages. Saves child data with fitted values and displays the resulting child fit plot.
+Plots monthly `pct` from `english_syncategory_relfreq` by `speaker` and fits `english_negation_words_lagModel` to child values. Saves `english_negation_words_childdata` with `predictions` and displays the fitted curve.
 
 ```{r negation_words_plot}
 english_negation_words_plot <- english_syncategory_relfreq %>%
@@ -196,7 +259,7 @@ english_negation_words_lagModel <- brm(
   file = file.path(english_model_dir, "english_function_word_lagModel"),
   file_refit = "on_change",
   iter = 10000,
-  seed = 1234
+  seed = 16
 )
 ```
 
@@ -239,17 +302,13 @@ english_negation_words_plot <-
 english_negation_words_plot
 ```
 
-## Distribution of Individual Function Words
+## Individual Negators
 
-Plots cumulative parts per thousand for each selected negator by speaker and fits separate child growth curves. Saves fitted child data and records each model’s lag estimate for the final comparison.
+Plots `cumulative_ppt` for `no` and `not` by `speaker` and fits child Gompertz curves. Saves fitted child tables and model objects for the word onset comparison.
 
-### Negation
+### no
 
-Analyzes processed `no` and `not` word values. Counts all scope labels in the individual-word curves and applies scope labels separately in the later child analysis.
-
-##### no (negative response / refusal)
-
-Plots cumulative occurrences per 1,000 tokens for `no` by speaker, fits a child Gompertz curve, and saves child data with fitted values. Displays the child fit plot and records its lag estimate in a separate word summary.
+Plots `cumulative_ppt` for `no` and fits `english_no_lagModel` to child data. Saves `english_no_childdata` with `predictions` and records the model lag summary.
 
 ```{r no_plot, echo=FALSE}
 english_functionword_relfreq %>%
@@ -290,7 +349,7 @@ english_no_lagModel <- brm(
   file = file.path(english_model_dir, "english_no_lagModel"),
   file_refit = "on_change",
   iter = 10000,
-  seed = 1234
+  seed = 16
 )
 ```
 
@@ -340,9 +399,9 @@ english_no_plot <-
 english_no_plot
 ```
 
-##### not (including contracted n't)
+### not
 
-Plots cumulative occurrences per 1,000 tokens for processed `not` by speaker, fits a child Gompertz curve, and saves child data with fitted values. Displays the child fit plot and records its lag estimate in a separate word summary.
+Plots `cumulative_ppt` for the pooled `not` category and fits `english_not_lagModel` to child data. Saves `english_not_childdata` with `predictions` and records the model lag summary.
 
 ```{r not_plot, echo=FALSE}
 english_functionword_relfreq %>%
@@ -383,7 +442,7 @@ english_not_lagModel <- brm(
   file = file.path(english_model_dir, "english_not_lagModel"),
   file_refit = "on_change",
   iter = 10000,
-  seed = 1234
+  seed = 16
 )
 ```
 
@@ -433,43 +492,29 @@ english_not_plot <-
 english_not_plot
 ```
 
-#### Sentential and Discourse Negation
+## Sentential and Discourse Negation
 
-Counts classified child negators against full monthly child-token totals. Keeps ages 0–10 as zero baselines and accumulates each word-scope rate only in later months when that word-scope pair occurs.
+Calculates scope-specific `cumulative_ppt` and fits child Gompertz curves by `negation_scope` and `negation_category`. Saves fitted child tables and scope onset summaries.
+
+### Calculate Scope Rates
+
+Calculates `cumulative_ppt` by `negation_scope` and `negation_category` from `english_tokens_processed` against `english_child_age_totals`. Saves `english_negation_scope_relfreq`.
 
 ```{r negation_scope_data, include=FALSE}
-# Reuse full monthly totals after imposing the child baseline.
 english_child_age_totals <- english_speaker_age_totals %>%
   filter(speaker == "child") %>%
-  select(age, total) %>%
-  arrange(age)
+  select(age, total)
 
-english_scope_counts <- english_tokens_processed %>%
-  filter(
-    speaker == "child",
-    word_category == "Negation",
-    word %in% english_negation_words,
-    negation_category %in% english_negation_words,
-    negation_scope %in% c("sentential", "discourse")
-  ) %>%
-  count(negation_scope, negation_category, age, name = "freq")
-
-if (nrow(english_scope_counts) == 0L) {
-  stop("No English child no/not tokens have sentential or discourse scope. Check the processed English tokens.")
-}
-
-english_negation_scope_relfreq <- crossing(
-  negation_scope = c("sentential", "discourse"),
-  negation_category = english_negation_words,
-  english_child_age_totals
-) %>%
-  left_join(
-    english_scope_counts,
-    by = c("negation_scope", "negation_category", "age")
-  ) %>%
+english_negation_scope_relfreq <- english_tokens_processed %>%
+  filter(speaker == "child", !is.na(negation_category),
+         negation_scope %in% c("sentential", "discourse")) %>%
+  count(negation_scope, negation_category, age, name = "freq") %>%
+  complete(nesting(negation_scope, negation_category), age = 0:10,
+           fill = list(freq = 0L)) %>%
+  left_join(english_child_age_totals, by = "age") %>%
   mutate(
     speaker = "child",
-    freq = replace_na(freq, 0L),
+    total = replace_na(total, 0L),
     freq = if_else(age <= 10, 0L, freq),
     relfreq = if_else(total == 0, 0, freq / total),
     ppt = relfreq * 1000
@@ -485,119 +530,73 @@ english_negation_scope_relfreq <- crossing(
   ) %>%
   ungroup()
 
-english_sentential_negation_childdata <- english_negation_scope_relfreq %>%
-  filter(negation_scope == "sentential")
+saveRDS(english_negation_scope_relfreq,
+        file.path(english_data_dir, "english_negation_scope_relfreq.RDS"))
 
-english_discourse_negation_childdata <- english_negation_scope_relfreq %>%
-  filter(negation_scope == "discourse")
-
-saveRDS(english_negation_scope_relfreq, file.path(english_data_dir, "english_negation_scope_relfreq.RDS"))
+# Token counts behind each curve (no-sentential = determiner no).
+english_negation_scope_relfreq %>%
+  group_by(negation_scope, negation_category) %>%
+  summarise(n_tokens = sum(freq), n_months = sum(freq > 0), .groups = "drop")
 ```
 
-##### Cumulative Growth Curves
+### Fit Scope Curves
 
-Fits a separate Gompertz curve to each scope-word series with positive cumulative values, leaving all-zero series with missing predictions. Saves the fitted child tables and defines the plotting function used by the two panels.
+Fits Gompertz curves to scope series with positive `cumulative_ppt` and saves `english_sentential_negation_childdata` and `english_discourse_negation_childdata` with `predictions`.
 
 ```{r negation_scope_curve_data, include=FALSE}
-english_fit_scope_growth <- function(scope_data, scope_name) {
-  if (nrow(scope_data) == 0L ||
-      !all(scope_data$negation_category %in% english_negation_words) ||
-      !all(scope_data$negation_scope == scope_name)) {
-    stop("Invalid English scope data. Run negation_scope_data first.")
-  }
+english_scope_series <- english_negation_scope_relfreq %>%
+  group_by(negation_scope, negation_category) %>%
+  filter(any(cumulative_ppt > 0)) %>%
+  group_split()
 
-  purrr::map_dfr(english_negation_words, function(w) {
-    word_data <- scope_data %>%
-      filter(
-        negation_category == w,
-        is.finite(age),
-        is.finite(cumulative_ppt)
-      ) %>%
-      arrange(age)
+english_scope_models <- list()
+english_scope_childdata <- list()
 
-    word_data$predictions <- rep(NA_real_, nrow(word_data))
+for (d in english_scope_series) {
+  d <- arrange(d, age)
+  key <- paste(d$negation_category[1], d$negation_scope[1], sep = "_")
+  asymptote <- max(5, ceiling(max(d$cumulative_ppt) * 2))
 
-    # Keep observed zeros, but do not estimate a model with no positive data.
-    if (nrow(word_data) == 0L || !any(word_data$cumulative_ppt > 0)) {
-      return(word_data)
-    }
+  model <- brm(
+    bf(cumulative_ppt ~ upperAsymptote *
+         exp(-exp(((growthRate * exp(1)) / upperAsymptote) * (lag - age) + 1)),
+       upperAsymptote ~ 1, growthRate ~ 1, lag ~ 1, nl = TRUE),
+    data = d,
+    prior = c(
+      set_prior(sprintf("uniform(0, %s)", asymptote),
+                nlpar = "upperAsymptote", lb = 0, ub = asymptote),
+      prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+      prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+    ),
+    file = file.path(english_model_dir, paste0("english_", key, "_lagModel")),
+    file_refit = "on_change",
+    iter = 10000,
+    seed = 16
+  )
 
-    asymptote <- max(5, ceiling(max(word_data$cumulative_ppt) * 2))
-
-    model <- brms::brm(
-      brms::bf(
-        cumulative_ppt ~ upperAsymptote *
-          exp(-exp(((growthRate * exp(1)) / upperAsymptote) * (lag - age) + 1)),
-        upperAsymptote ~ 1,
-        growthRate ~ 1,
-        lag ~ 1,
-        nl = TRUE
-      ),
-      data = word_data,
-      prior = c(
-        brms::set_prior(
-          sprintf("uniform(0, %s)", asymptote),
-          nlpar = "upperAsymptote", lb = 0, ub = asymptote
-        ),
-        brms::set_prior("uniform(0, 10)", nlpar = "growthRate", lb = 0, ub = 10),
-        brms::set_prior("uniform(10, 72)", nlpar = "lag", lb = 10, ub = 72)
-      ),
-      file = file.path(
-        english_model_dir,
-        paste0("english_", english_negation_model_names[[w]], "_",
-               scope_name, "_lagModel")
-      ),
-      file_refit = "on_change",
-      iter = 10000,
-      seed = 1234
-    )
-
-    word_data$predictions <- fitted(model, newdata = word_data)[, "Estimate"]
-    word_data
-  })
+  d$predictions <- fitted(model, newdata = d)[, "Estimate"]
+  english_scope_models[[key]] <- model
+  english_scope_childdata[[key]] <- d
 }
 
-english_sentential_negation_childdata <- english_fit_scope_growth(
-  english_sentential_negation_childdata, "sentential"
-)
+english_scope_childdata_all <- bind_rows(english_scope_childdata)
+english_sentential_negation_childdata <- filter(english_scope_childdata_all, negation_scope == "sentential")
+english_discourse_negation_childdata  <- filter(english_scope_childdata_all, negation_scope == "discourse")
 
-english_discourse_negation_childdata <- english_fit_scope_growth(
-  english_discourse_negation_childdata, "discourse"
-)
+saveRDS(english_sentential_negation_childdata,
+        file.path(english_data_dir, "english_sentential_negation_childdata.RDS"))
+saveRDS(english_discourse_negation_childdata,
+        file.path(english_data_dir, "english_discourse_negation_childdata.RDS"))
 
-saveRDS(
-  english_sentential_negation_childdata,
-  file.path(english_data_dir, "english_sentential_negation_childdata.RDS")
-)
-
-saveRDS(
-  english_discourse_negation_childdata,
-  file.path(english_data_dir, "english_discourse_negation_childdata.RDS")
-)
-
-# Match the Mandarin growth-curve panels: black points and blue fitted lines.
 english_plot_child_negation <- function(plot_data, plot_title) {
-  if (nrow(plot_data) == 0L ||
-      !all(plot_data$negation_category %in% english_negation_words)) {
-    stop("Invalid English plotting data. Rebuild the English scope tables first.")
-  }
-
   ggplot(plot_data, aes(x = age, y = cumulative_ppt)) +
     geom_point(color = "black", size = 2) +
     geom_line(aes(y = predictions), color = "blue", linewidth = 1, na.rm = TRUE) +
-    facet_wrap(
-      ~ negation_category,
-      ncol = 2,
-      scales = "free_y",
-      labeller = as_labeller(setNames(english_negation_labels, english_negation_words))
-    ) +
+    facet_wrap(~ negation_category, ncol = 2, scales = "free_y") +
     scale_x_continuous(breaks = seq(0, 72, 12)) +
     scale_y_continuous(limits = c(0, NA)) +
-    labs(
-      title = plot_title,
-      x = "Child Age (Months)",
-      y = "Cumulative Occurrences per 1,000 Tokens"
-    ) +
+    labs(title = plot_title, x = "Child Age (Months)",
+         y = "Cumulative Occurrences per 1,000 Tokens") +
     theme_bw() +
     theme(
       legend.position = "none",
@@ -609,13 +608,41 @@ english_plot_child_negation <- function(plot_data, plot_title) {
 }
 ```
 
-##### Sentential
+### Estimate and Plot Scope Onsets
 
-Creates, saves, and displays the sentential child plot for processed `not`, with observed cumulative rates and its fitted curve.
+Extracts `lag_Intercept` and 95% credible intervals from `english_scope_models` into `english_negation_scope_age_of_production`. Saves and displays separate sentential and discourse onset plots.
+
+```{r scope_age_of_production}
+english_negation_scope_age_of_production <- purrr::imap_dfr(english_scope_models, function(model, key) {
+  parts <- str_split_fixed(key, "_", 2)
+  extract_negation_lag(model, "English", word_name = parts[, 1],
+                       category_name = str_to_title(parts[, 2]))
+})
+
+saveRDS(english_negation_scope_age_of_production,
+        file.path(english_data_dir, "english_negation_scope_age_of_production.RDS"))
+
+english_sentential_negation_onset_plot <-
+  plot_negation_scope_onset(english_negation_scope_age_of_production, "Sentential")
+english_discourse_negation_onset_plot <-
+  plot_negation_scope_onset(english_negation_scope_age_of_production, "Discourse")
+
+for (nm in c("sentential", "discourse")) {
+  p <- get(paste0("english_", nm, "_negation_onset_plot"))
+  saveRDS(p, file.path(english_data_dir, paste0("english_", nm, "_negation_onset_plot.RDS")))
+}
+
+english_negation_scope_age_of_production
+english_sentential_negation_onset_plot
+english_discourse_negation_onset_plot
+```
+### Plot Sentential Curves
+
+Plots observed `cumulative_ppt` and fitted `predictions` from `english_sentential_negation_childdata` by `negation_category`. Saves `english_sentential_negation_child_plot` as RDS.
 
 ```{r sentential_graph}
 english_sentential_negation_child_plot <- english_plot_child_negation(
-  filter(english_sentential_negation_childdata, negation_category == "not"),
+  english_sentential_negation_childdata,
   "Sentential Negation in Children"
 )
 
@@ -623,17 +650,16 @@ saveRDS(
   english_sentential_negation_child_plot,
   file.path(english_data_dir, "english_sentential_negation_child_plot.RDS")
 )
-
 english_sentential_negation_child_plot
 ```
 
-##### Discourse
+### Plot Discourse Curves
 
-Creates, saves, and displays the discourse child plot for processed `no`, with observed cumulative rates and its fitted curve.
+Plots observed `cumulative_ppt` and fitted `predictions` from `english_discourse_negation_childdata` by `negation_category`. Saves `english_discourse_negation_child_plot` as RDS.
 
 ```{r discourse_graph}
 english_discourse_negation_child_plot <- english_plot_child_negation(
-  filter(english_discourse_negation_childdata, negation_category == "no"),
+  english_discourse_negation_childdata,
   "Discourse Negation in Children"
 )
 
@@ -642,12 +668,13 @@ saveRDS(
   file.path(english_data_dir, "english_discourse_negation_child_plot.RDS")
 )
 
+
 english_discourse_negation_child_plot
 ```
 
-# Age of Production Plot
+# Word Onset Estimates
 
-Combines and saves the separate `no` and `not` word-model lag summaries, then displays their means with 95% credible intervals. These model parameters are not observed ages of first production.
+Combines `english_no_age_of_production` and `english_not_age_of_production` into `english_age_of_production` and plots lag estimates with 95% credible intervals. Interprets these values as fitted lag parameters rather than observed first-production ages.
 
 ```{r age_of_production_build}
 english_age_of_production <- bind_rows(
@@ -655,15 +682,10 @@ english_age_of_production <- bind_rows(
   english_not_age_of_production
 )
 
-saveRDS(english_age_of_production, file.path(english_data_dir, "english_age_of_production.RDS"))
 english_age_of_production
 ```
 
 ```{r age_of_production_plot}
-english_age_of_production <- readRDS(
-  file.path(english_data_dir, "english_age_of_production.RDS")
-)
-
 english_negation_onsetage_plot <- english_age_of_production %>%
   mutate(word = fct_reorder(word, Estimate)) %>%
   ggplot(aes(x = Estimate, y = word)) +

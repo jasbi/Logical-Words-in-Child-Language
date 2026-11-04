@@ -7,726 +7,392 @@ output: pdf_document
 
 # Setup
 
-Loads packages for token summaries, Bayesian modeling, and plotting, and configures knitr to stop on chunk errors.
+Loads `tidyverse`, `arrow`, and `brms`, and sets `knitr::opts_chunk$set(error = FALSE)`. Defines `french_rates()`, `french_fit_gompertz()`, and helpers for fitted curves and lag plots.
 
 ```{r packages, include=FALSE}
+knitr::opts_chunk$set(error = FALSE)
 library(tidyverse)
 library(arrow)
 library(brms)
-library(grid)
-library(gridExtra)
 ```
 
-```{r knitr_options}
-knitr::opts_chunk$set(error = FALSE)
-```
-
-# Load Data
-
-Creates the French model and processed-data directories, loads the processed token table from Feather, and defines `pas` and `non` as the selected negation words. Counts full monthly token totals for the later word and category tables.
-
-```{r processedTokens}
-french_data_dir <- "../french/french_data/processed_data"
-french_model_dir <- "../french/french_model/modeling"
-
-dir.create(french_model_dir, showWarnings = FALSE, recursive = TRUE)
-dir.create(french_data_dir, showWarnings = FALSE, recursive = TRUE)
-
-french_tokens_processed <- read_feather(
-  file.path(french_data_dir, "french_tokens_processed.feather")
-)
-
-french_negation_words <- c("pas", "non")
-
-french_observed_speaker_age_totals <- french_tokens_processed %>%
-  count(speaker, age, name = "total")
-
-french_speaker_age_totals <- bind_rows(
-  french_observed_speaker_age_totals %>%
-    filter(speaker == "child") %>%
-    complete(age = 0:10, fill = list(speaker = "child", total = 0L)) %>%
-    mutate(total = if_else(age <= 10, 0L, total)),
-  french_observed_speaker_age_totals %>%
-    filter(speaker != "child")
-) %>%
-  arrange(speaker, age)
-```
-
-# Computing Cumulative Relative Frequencies
-
-Counts full monthly token totals before computing syntactic, word, and semantic-category rates. Keeps child ages 0–10 as zero baselines and excludes later zero-occurrence months only from each word’s cumulative denominator.
-
-## Function vs. Content Words
-
-Calculates monthly and cumulative percentages for the processed `syncategory` labels and saves the table. `Function` contains the selected target negators; `nonfunction` contains all other retained tokens, including any other linguistic function words.
-
-```{r syncategory_relfreq}
-french_syncategory_relfreq <-
-  french_tokens_processed %>%
-  group_by(syncategory, speaker, age) %>%
-  summarise(freq = n(), .groups = "drop") %>%
-  complete(
-    nesting(speaker, age),
-    syncategory = c("Function", "nonfunction"),
-    fill = list(freq = 0L)
-  ) %>%
-  complete(
-    nesting(syncategory) %>% mutate(speaker = "child"),
-    age = 0:10,
-    fill = list(freq = 0L)
-  ) %>%
-  mutate(freq = if_else(speaker == "child" & age <= 10, 0L, freq)) %>%
-  group_by(speaker, age) %>%
-  mutate(
-    total = sum(freq),
-    relfreq = if_else(total > 0, freq / total, 0),
-    pct = relfreq * 100
-  ) %>%
-  group_by(syncategory, speaker) %>%
-  arrange(age, .by_group = TRUE) %>%
-  mutate(
-    cum_freq = cumsum(freq),
-    cum_total = cumsum(total),
-    cumulative_relfreq = if_else(cum_total > 0, cum_freq / cum_total, 0),
-    cumulative_pct = cumulative_relfreq * 100
-  ) %>%
-  ungroup() %>%
-  select(syncategory, speaker, age, freq, total, relfreq, pct,
-         cum_freq, cum_total, cumulative_relfreq, cumulative_pct) %>%
-  ungroup()
-
-saveRDS(
-  french_syncategory_relfreq,
-  file.path(french_data_dir, "french_syncategory_relfreq.RDS")
-)
-```
-
-## Individual Function Words
-
-Maps classified `pas` and `non` tokens to word rows and calculates their rates against full monthly token totals. Retains child ages 0–10 as zero baselines and accumulates each word’s counts and totals only in later months where it occurs.
-
-```{r functionword_relfreq}
-french_functionword_relfreq <-
-  french_tokens_processed %>%
-  mutate(
-    # Use classified categories rather than raw spellings.
-    # Other tokens remain available for the denominator.
-    word = if_else(
-      negation_category %in% french_negation_words,
-      as.character(negation_category),
-      "nonfunction"
-    )
-  ) %>%
-  group_by(word, speaker, age) %>%
-  summarise(freq = n(), .groups = "drop") %>%
-  complete(
-    nesting(speaker, age),
-    word = c(french_negation_words, "nonfunction"),
-    fill = list(freq = 0L)
-  ) %>%
-  complete(
-    nesting(word) %>% mutate(speaker = "child"),
-    age = 0:10,
-    fill = list(freq = 0L)
-  ) %>%
-  # Retain the existing early-age modeling convention.
-  mutate(
-    freq = if_else(
-      speaker == "child" & age <= 10,
-      0L,
-      freq
-    )
-  ) %>%
-  left_join(french_speaker_age_totals, by = c("speaker", "age")) %>%
-  mutate(
-    total = replace_na(total, 0L),
-    relfreq = if_else(total > 0, freq / total, 0),
-    ppt = relfreq * 1000
-  ) %>%
-  filter(word %in% french_negation_words,
-         freq > 0 | (speaker == "child" & age %in% 0:10)) %>%
-  group_by(word, speaker) %>%
-  arrange(age, .by_group = TRUE) %>%
-  mutate(
-    cum_freq = cumsum(freq),
-    cum_total = cumsum(total),
-    cumulative_relfreq = if_else(
-      cum_total > 0,
-      cum_freq / cum_total,
-      0
-    ),
-    cumulative_ppt = cumulative_relfreq * 1000
-  ) %>%
-  ungroup() %>%
-  select(word, speaker, age, freq, total, relfreq, ppt,
-         cum_freq, cum_total, cumulative_relfreq, cumulative_ppt) %>%
-  ungroup()
-
-saveRDS(
-  french_functionword_relfreq,
-  file.path(french_data_dir, "french_functionword_relfreq.RDS")
-)
-```
-
-## Function Word Semantic Categories
-
-Counts classified `pas` and `non` tokens directly from the processed table against full monthly totals, independent of word-specific exclusions. Saves monthly parts per thousand and cumulative relative frequency for the combined `Negation` category.
-
-```{r wordcategory_relfreq}
-french_wordcategory_relfreq <-
-  french_speaker_age_totals %>%
-  left_join(
-    french_tokens_processed %>%
-      filter(negation_category %in% french_negation_words) %>%
-      count(speaker, age, name = "freq"),
-    by = c("speaker", "age")
-  ) %>%
-  mutate(
-    word_category = "Negation",
-    freq = replace_na(freq, 0L),
-    freq = if_else(speaker == "child" & age <= 10, 0L, freq),
-    relfreq = if_else(total > 0, freq / total, 0),
-    ppt = relfreq * 1000
-  ) %>%
-  group_by(word_category, speaker) %>%
-  arrange(age, .by_group = TRUE) %>%
-  mutate(
-    cum_freq = cumsum(freq),
-    cum_total = cumsum(total),
-    cumulative_relfreq = if_else(
-      cum_total > 0,
-      cum_freq / cum_total,
-      0
-    )
-  ) %>%
-  ungroup() %>%
-  select(word_category, speaker, age, freq, total, relfreq, ppt,
-         cum_freq, cum_total, cumulative_relfreq) %>%
-  ungroup()
-
-saveRDS(
-  french_wordcategory_relfreq,
-  file.path(french_data_dir, "french_wordcategory_relfreq.RDS")
-)
-```
-
-# Plots and Growth Curves
-
-Plots monthly category percentages and cumulative word rates, fits Bayesian Gompertz curves to child data, and displays observations with fitted values. Saves the fitted child tables and scope-labeled plot objects where specified.
-
-## Overall Negation Production
-
-Plots monthly percentages for the combined `pas` and `non` category by speaker and fits a child Gompertz curve when child negation counts are present. Saves child data with fitted values, then creates and displays the child observed-versus-fitted plot.
-
-```{r negation_words_plot, echo=FALSE}
-french_negation_words_relfreq <- french_wordcategory_relfreq %>%
-  mutate(pct = relfreq * 100)
-
-french_negation_words_plot <- french_negation_words_relfreq %>%
-  ggplot(aes(age, pct)) +
-  geom_point() +
-  facet_grid(. ~ speaker) +
-  theme_bw() +
-  labs(
-    title = "Negation",
-    x = "Age (Months)",
-    y = "Monthly Percent of Tokens"
-  ) +
-  scale_y_continuous(limits = c(0, 100)) +
-  theme(text = element_text(size = 14))
-
-french_negation_words_plot
-```
-
-```{r negation_words_growth_model, include=FALSE}
-french_negation_words_childdata <- french_negation_words_relfreq %>%
-  filter(speaker == "child") %>%
-  arrange(age)
-
-if (!any(french_negation_words_childdata$freq > 0)) {
-  stop("No retained child negation tokens are available for modeling.")
+```{r helpers, include=FALSE}
+# Monthly and cumulative rates against full monthly token totals. Child months
+# 0-10 are zero baselines; with drop_zero_months, later months in which a
+# series does not occur are left out of its cumulative denominator.
+french_rates <- function(counts, totals, drop_zero_months = TRUE) {
+  counts %>%
+    complete(series, speaker = "child", age = 0:10, fill = list(freq = 0L)) %>%
+    left_join(totals, by = c("speaker", "age")) %>%
+    mutate(
+      total = replace_na(total, 0L),
+      freq = if_else(speaker == "child" & age <= 10, 0L, freq),
+      relfreq = if_else(total > 0, freq / total, 0),
+      ppt = relfreq * 1000,
+      pct = relfreq * 100
+    ) %>%
+    filter(!drop_zero_months | freq > 0 | (speaker == "child" & age <= 10)) %>%
+    group_by(series, speaker) %>%
+    arrange(age, .by_group = TRUE) %>%
+    mutate(
+      cum_freq = cumsum(freq),
+      cum_total = cumsum(total),
+      cumulative_relfreq = if_else(cum_total > 0, cum_freq / cum_total, 0),
+      cumulative_ppt = cumulative_relfreq * 1000
+    ) %>%
+    ungroup()
 }
 
-french_negation_words_lagModel <- brm(
-  bf(
-    pct ~ upperAsymptote *
-      exp(-exp(((growthRate * exp(1)) / upperAsymptote) *
-                 (lag - age) + 1)),
-    upperAsymptote ~ 1,
-    growthRate ~ 1,
-    lag ~ 1,
-    nl = TRUE
-  ),
-  data = french_negation_words_childdata,
-  prior = c(
-    prior(
-      uniform(0, 100),
-      nlpar = "upperAsymptote", lb = 0, ub = 100
-    ),
-    prior(
-      uniform(0, 10),
-      nlpar = "growthRate", lb = 0, ub = 10
-    ),
-    prior(
-      uniform(10, 72),
-      nlpar = "lag", lb = 10, ub = 72
-    )
-  ),
-  file = file.path(french_model_dir, "french_negation_words_lagModel"),
-  file_refit = "on_change",
-  iter = 10000,
-  seed = 2026
-)
-```
-
-```{r negation_words_predictions}
-french_negation_words_predictions <- as.data.frame(
-  fitted(french_negation_words_lagModel)
-)
-
-french_negation_words_childdata$predictions <-
-  french_negation_words_predictions[, "Estimate"]
-
-saveRDS(
-  french_negation_words_childdata,
-  file.path(french_data_dir, "french_negation_words_childdata.RDS")
-)
-```
-
-```{r negation_words_prediction_plot}
-french_negation_words_plot <- ggplot(
-  french_negation_words_childdata,
-  aes(age, pct)
-) +
-  geom_point(aes(color = "Actual Data"), size = 2) +
-  geom_line(
-    aes(y = predictions, color = "Fitted Values"),
-    linewidth = 1
-  ) +
-  scale_color_manual(
-    values = c("Actual Data" = "black", "Fitted Values" = "blue")
-  ) +
-  theme_bw() +
-  labs(
-    title = "Negation",
-    x = "Child Age (Month)",
-    y = "Monthly Percent of Tokens"
-  ) +
-  theme(
-    legend.position = "none",
-    plot.title = element_text(size = 20, hjust = 0.5),
-    axis.title = element_text(size = 16),
-    axis.text = element_text(size = 14)
-  )
-
-french_negation_words_plot
-```
-
-## Distribution of Individual Function Words
-
-Plots cumulative parts per thousand for `pas` and `non` by speaker, fits child growth curves, and records fitted values and lag estimates for later displays.
-
-### Negation
-
-Analyzes the selected `pas` and `non` rows from the saved word-frequency table. The later scope-labeled panels reuse these word-level curves.
-
-##### pas
-
-Plots cumulative occurrences per 1,000 tokens for `pas` by speaker, fits a child Gompertz curve, and saves child data with fitted values. Displays the child fit plot and records the model lag estimate.
-
-```{r pas_plot, echo=FALSE}
-french_functionword_relfreq %>%
-  filter(word == "pas") %>%
-  ggplot(aes(age, cumulative_ppt)) +
-  geom_point() +
-  facet_grid(. ~ speaker) +
-  theme_bw() +
-  labs(
-    title = "pas",
-    x = "Age (Months)",
-    y = "Cumulative Occurrences per 1,000 Tokens"
-  )
-```
-
-```{r pas_growth_model, include=FALSE}
-french_pas_childdata <- french_functionword_relfreq %>%
-  filter(word == "pas", speaker == "child") %>%
-  arrange(age)
-
-if (!any(french_pas_childdata$freq > 0)) {
-  stop("No retained child uses of 'pas' are available for modeling.")
-}
-
-# Retain the existing French upper-asymptote prior.
-french_pas_upper_bound <- max(
-  5,
-  ceiling(max(french_pas_childdata$cumulative_ppt) * 2)
-)
-
-french_pas_lagModel <- brm(
-  bf(
-    cumulative_ppt ~ upperAsymptote *
-      exp(-exp(
-        ((growthRate * exp(1)) / upperAsymptote) *
-          (lag - age) + 1
+# Bayesian Gompertz curve; refits only when the data or model change.
+french_fit_gompertz <- function(data, outcome, upper_bound, file_name) {
+  brm(
+    bf(
+      as.formula(paste(
+        outcome, "~ upperAsymptote * exp(-exp(((growthRate * exp(1)) /",
+        "upperAsymptote) * (lag - age) + 1))"
       )),
-    upperAsymptote ~ 1,
-    growthRate ~ 1,
-    lag ~ 1,
-    nl = TRUE
-  ),
-  data = french_pas_childdata,
-  prior = c(
-    set_prior(
-      sprintf("uniform(0, %s)", french_pas_upper_bound),
-      nlpar = "upperAsymptote",
-      lb = 0,
-      ub = french_pas_upper_bound
+      upperAsymptote ~ 1, growthRate ~ 1, lag ~ 1,
+      nl = TRUE
     ),
-    prior(
-      uniform(0, 10),
-      nlpar = "growthRate",
-      lb = 0,
-      ub = 10
+    data = data,
+    prior = c(
+      set_prior(sprintf("uniform(0, %s)", upper_bound),
+                nlpar = "upperAsymptote", lb = 0, ub = upper_bound),
+      prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+      prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
     ),
-    prior(
-      uniform(10, 72),
-      nlpar = "lag",
-      lb = 10,
-      ub = 72
-    )
-  ),
-  file = file.path(french_model_dir, "french_pas_lagModel"),
-  file_refit = "on_change",
-  iter = 10000,
-  seed = 2026
-)
-```
-
-```{r pas_predictions}
-french_pas_predictions <- as.data.frame(fitted(french_pas_lagModel))
-
-french_pas_childdata$predictions <- french_pas_predictions[, "Estimate"]
-
-saveRDS(
-  french_pas_childdata,
-  file.path(french_data_dir, "french_pas_childdata.RDS")
-)
-```
-
-```{r pas_age_of_production}
-french_pas_lag <- fixef(french_pas_lagModel)[3, ]
-
-french_pas_age_of_production <- tibble(
-  word = "pas",
-  Estimate = round(french_pas_lag[["Estimate"]], 1),
-  Est.Error = round(french_pas_lag[["Est.Error"]], 1),
-  Q2.5 = round(french_pas_lag[["Q2.5"]], 1),
-  Q97.5 = round(french_pas_lag[["Q97.5"]], 1)
-)
-```
-
-```{r pas_prediction_plot}
-french_pas_plot <-
-  ggplot(french_pas_childdata, aes(age, cumulative_ppt)) +
-  geom_point(aes(color = "Actual Data"), size = 2) +
-  geom_line(
-    aes(y = predictions, color = "Fitted Values"),
-    linewidth = 1
-  ) +
-  scale_color_manual(
-    name = "Legend",
-    values = c(
-      "Actual Data" = "black",
-      "Fitted Values" = "blue"
-    )
-  ) +
-  theme_bw() +
-  labs(
-    title = "pas",
-    x = "Child Age (Month)",
-    y = "Cumulative Occurrences per 1,000 Tokens"
-  ) +
-  theme(
-    legend.position = "none",
-    plot.title = element_text(size = 20, hjust = 0.5),
-    axis.title.x = element_text(size = 16),
-    axis.title.y = element_text(size = 16),
-    axis.text.x = element_text(size = 14),
-    axis.text.y = element_text(size = 14)
+    file = file.path(french_model_dir, file_name),
+    file_refit = "on_change",
+    iter = 10000,
+    seed = 16
   )
-
-french_pas_plot
-```
-
-##### non
-
-Plots cumulative occurrences per 1,000 tokens for `non` by speaker, fits a child Gompertz curve, and saves child data with fitted values. Displays the child fit plot and records the model lag estimate.
-
-```{r non_plot, echo=FALSE}
-french_functionword_relfreq %>%
-  filter(word == "non") %>%
-  ggplot(aes(age, cumulative_ppt)) +
-  geom_point() +
-  facet_grid(. ~ speaker) +
-  theme_bw() +
-  labs(
-    title = "non",
-    x = "Age (Months)",
-    y = "Cumulative Occurrences per 1,000 Tokens"
-  )
-```
-
-```{r non_growth_model, include=FALSE}
-french_non_childdata <- french_functionword_relfreq %>%
-  filter(word == "non", speaker == "child") %>%
-  arrange(age)
-
-if (!any(french_non_childdata$freq > 0)) {
-  stop("No retained child uses of 'non' are available for modeling.")
 }
 
-# Retain the existing French upper-asymptote prior.
-french_non_upper_bound <- max(
-  5,
-  ceiling(max(french_non_childdata$cumulative_ppt) * 2)
-)
-
-french_non_lagModel <- brm(
-  bf(
-    cumulative_ppt ~ upperAsymptote *
-      exp(-exp(
-        ((growthRate * exp(1)) / upperAsymptote) *
-          (lag - age) + 1
-      )),
-    upperAsymptote ~ 1,
-    growthRate ~ 1,
-    lag ~ 1,
-    nl = TRUE
-  ),
-  data = french_non_childdata,
-  prior = c(
-    set_prior(
-      sprintf("uniform(0, %s)", french_non_upper_bound),
-      nlpar = "upperAsymptote",
-      lb = 0,
-      ub = french_non_upper_bound
-    ),
-    prior(
-      uniform(0, 10),
-      nlpar = "growthRate",
-      lb = 0,
-      ub = 10
-    ),
-    prior(
-      uniform(10, 72),
-      nlpar = "lag",
-      lb = 10,
-      ub = 72
-    )
-  ),
-  file = file.path(french_model_dir, "french_non_lagModel"),
-  file_refit = "on_change",
-  iter = 10000,
-  seed = 2026
-)
-```
-
-```{r non_predictions}
-french_non_predictions <- as.data.frame(fitted(french_non_lagModel))
-
-french_non_childdata$predictions <- french_non_predictions[, "Estimate"]
-
-saveRDS(
-  french_non_childdata,
-  file.path(french_data_dir, "french_non_childdata.RDS")
-)
-```
-
-```{r non_age_of_production}
-french_non_lag <- fixef(french_non_lagModel)[3, ]
-
-french_non_age_of_production <- tibble(
-  word = "non",
-  Estimate = round(french_non_lag[["Estimate"]], 1),
-  Est.Error = round(french_non_lag[["Est.Error"]], 1),
-  Q2.5 = round(french_non_lag[["Q2.5"]], 1),
-  Q97.5 = round(french_non_lag[["Q97.5"]], 1)
-)
-```
-
-```{r non_prediction_plot}
-french_non_plot <-
-  ggplot(french_non_childdata, aes(age, cumulative_ppt)) +
-  geom_point(aes(color = "Actual Data"), size = 2) +
-  geom_line(
-    aes(y = predictions, color = "Fitted Values"),
-    linewidth = 1
-  ) +
-  scale_color_manual(
-    name = "Legend",
-    values = c(
-      "Actual Data" = "black",
-      "Fitted Values" = "blue"
-    )
-  ) +
-  theme_bw() +
-  labs(
-    title = "non",
-    x = "Child Age (Month)",
-    y = "Cumulative Occurrences per 1,000 Tokens"
-  ) +
-  theme(
-    legend.position = "none",
-    plot.title = element_text(size = 20, hjust = 0.5),
-    axis.title.x = element_text(size = 16),
-    axis.title.y = element_text(size = 16),
-    axis.text.x = element_text(size = 14),
-    axis.text.y = element_text(size = 14)
+extract_negation_lag <- function(model, language_name, word_name, category_name) {
+  model_summary <- brms::fixef(model)
+  if (!"lag_Intercept" %in% rownames(model_summary)) {
+    stop("Cannot find lag_Intercept for ", language_name, ": ", word_name)
+  }
+  lag_summary <- model_summary["lag_Intercept", ]
+  tibble(
+    language = language_name,
+    category = category_name,
+    word = word_name,
+    Estimate = unname(lag_summary["Estimate"]),
+    Est.Error = unname(lag_summary["Est.Error"]),
+    Q2.5 = unname(lag_summary["Q2.5"]),
+    Q97.5 = unname(lag_summary["Q97.5"])
   )
+}
 
-french_non_plot
-```
-
-#### Sentential and Discourse Negation
-
-Labels the fitted `pas` child data as sentential and the fitted `non` child data as discourse, retaining their zero baselines and word-specific cumulative rates. Saves those copied tables and defines a shared plot of cumulative observations and fitted values; it does not filter tokens by their original `negation_scope` labels.
-
-```{r negation_scope_curve_data, include=FALSE}
-# Reuse the previously calculated frequencies and fitted predictions.
-# Run pas_predictions and non_predictions first.
-
-french_sentential_negation_childdata <- french_pas_childdata %>%
-  ungroup() %>%
-  arrange(age) %>%
-  mutate(
-    negation_category = "pas",
-    negation_scope = "sentential"
-  )
-
-french_discourse_negation_childdata <- french_non_childdata %>%
-  ungroup() %>%
-  arrange(age) %>%
-  mutate(
-    negation_category = "non",
-    negation_scope = "discourse"
-  )
-
-saveRDS(
-  french_sentential_negation_childdata,
-  file.path(french_data_dir, "french_sentential_negation_childdata.RDS")
-)
-
-saveRDS(
-  french_discourse_negation_childdata,
-  file.path(french_data_dir, "french_discourse_negation_childdata.RDS")
-)
-
-# Plot cumulative frequencies as black points and fitted values in blue.
-french_plot_child_negation <- function(plot_data, plot_title) {
-  ggplot(plot_data, aes(age, cumulative_ppt)) +
+# Child observations (black) and fitted values (blue).
+french_fit_plot <- function(data, y, title, y_label) {
+  ggplot(data, aes(age, .data[[y]])) +
     geom_point(color = "black", size = 2) +
-    geom_line(
-      aes(y = predictions),
-      color = "blue",
-      linewidth = 1,
-      na.rm = TRUE
-    ) +
-    facet_wrap(
-      ~ negation_category,
-      ncol = 2,
-      scales = "free_y"
-    ) +
-    scale_x_continuous(breaks = seq(0, 72, 12)) +
-    scale_y_continuous(limits = c(0, NA)) +
-    labs(
-      title = plot_title,
-      x = "Child Age (Months)",
-      y = "Cumulative Occurrences per 1,000 Tokens"
-    ) +
+    geom_line(aes(y = predictions), color = "blue", linewidth = 1, na.rm = TRUE) +
+    labs(title = title, x = "Child Age (Months)", y = y_label) +
     theme_bw() +
     theme(
-      legend.position = "none",
       plot.title = element_text(size = 20, hjust = 0.5),
       strip.text = element_text(size = 16),
       axis.title = element_text(size = 16),
       axis.text = element_text(size = 14)
     )
 }
+
+plot_negation_scope_onset <- function(onset_data, category_name) {
+  plot_title <- paste(unique(onset_data$language), category_name, "Negation")
+  plot_data <- onset_data %>%
+    filter(category == category_name, is.finite(Estimate)) %>%
+    mutate(word = forcats::fct_reorder(word, Estimate))
+
+  if (nrow(plot_data) == 0L) {
+    return(
+      ggplot() +
+        theme_void() +
+        annotate("text", x = 0, y = 0, label = "No fitted lag estimate available") +
+        labs(title = plot_title)
+    )
+  }
+
+  ggplot(plot_data, aes(x = Estimate, y = word)) +
+    geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+    scale_x_continuous(breaks = seq(0, 72, by = 6)) +
+    coord_cartesian(xlim = c(0, 72)) +
+    labs(title = plot_title, x = "Fitted lag (months)", y = NULL) +
+    theme_bw(base_size = 12)
+}
+
+french_save_plot <- function(plot, name) {
+  saveRDS(plot, file.path(french_data_dir, paste0(name, ".RDS")))
+}
 ```
 
-##### Sentential
+# Load Data
 
-Creates, saves, and displays the `pas` child plot labeled as sentential negation.
+Loads `french_tokens_processed` from the processed Feather file and counts monthly tokens and negators by `speaker` and `age`. Checks for the `n_pas`, `n_non`, `n_non_sentential`, and `n_non_discourse` columns produced by extraction.
 
-```{r sentential_graph}
-french_sentential_negation_child_plot <- french_plot_child_negation(
-  filter(french_sentential_negation_childdata, negation_category == "pas"),
-  "Sentential Negation in Children"
+```{r load_data}
+french_data_dir <- "../french/french_data/processed_data"
+french_model_dir <- "../french/french_model/modeling"
+dir.create(french_model_dir, showWarnings = FALSE, recursive = TRUE)
+
+french_tokens_processed <- read_feather(
+  file.path(french_data_dir, "french_tokens_processed.feather")
 )
 
-saveRDS(
-  french_sentential_negation_child_plot,
-  file.path(french_data_dir, "french_sentential_negation_child_plot.RDS")
+french_missing_columns <- setdiff(
+  c("speaker", "age", "syncategory",
+    "n_pas", "n_non", "n_non_sentential", "n_non_discourse"),
+  names(french_tokens_processed)
 )
+if (length(french_missing_columns) > 0L) {
+  stop("Rerun the extraction file. Missing columns: ",
+       paste(french_missing_columns, collapse = ", "))
+}
+
+french_speaker_age_totals <- french_tokens_processed %>%
+  count(speaker, age, name = "total") %>%
+  complete(speaker = "child", age = 0:10, fill = list(total = 0L)) %>%
+  mutate(total = if_else(speaker == "child" & age <= 10, 0L, total)) %>%
+  arrange(speaker, age)
+
+french_negation_counts <- french_tokens_processed %>%
+  group_by(speaker, age) %>%
+  summarise(
+    negation = sum(n_pas + n_non),
+    pas = sum(n_pas),
+    non = sum(n_non),
+    non_sentential = sum(n_non_sentential),
+    non_discourse = sum(n_non_discourse),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(-c(speaker, age), names_to = "series", values_to = "freq")
+```
+
+# Calculate Relative Frequencies
+
+Calculates monthly and cumulative rates in `french_syncategory_relfreq`, `french_wordcategory_relfreq`, and `french_functionword_relfreq`. Retains every month for overall negation and drops later zero-occurrence months from the individual negator and scope series.
+
+```{r relfreq}
+french_syncategory_relfreq <- french_tokens_processed %>%
+  count(syncategory, speaker, age, name = "freq") %>%
+  rename(series = syncategory) %>%
+  complete(nesting(speaker, age), series = c("Function", "nonfunction"),
+           fill = list(freq = 0L)) %>%
+  french_rates(french_speaker_age_totals, drop_zero_months = FALSE) %>%
+  transmute(syncategory = series, speaker, age, freq, total, relfreq, pct,
+            cum_freq, cum_total, cumulative_relfreq,
+            cumulative_pct = cumulative_relfreq * 100)
+
+french_wordcategory_relfreq <- french_negation_counts %>%
+  filter(series == "negation") %>%
+  french_rates(french_speaker_age_totals, drop_zero_months = FALSE) %>%
+  transmute(word_category = "Negation", speaker, age, freq, total, relfreq,
+            ppt, pct, cum_freq, cum_total, cumulative_relfreq)
+
+french_series_relfreq <- french_negation_counts %>%
+  filter(series != "negation") %>%
+  french_rates(french_speaker_age_totals)
+
+french_functionword_relfreq <- french_series_relfreq %>%
+  filter(series %in% c("pas", "non")) %>%
+  transmute(word = series, speaker, age, freq, total, relfreq, ppt,
+            cum_freq, cum_total, cumulative_relfreq, cumulative_ppt)
+
+saveRDS(french_syncategory_relfreq,
+        file.path(french_data_dir, "french_syncategory_relfreq.RDS"))
+saveRDS(french_wordcategory_relfreq,
+        file.path(french_data_dir, "french_wordcategory_relfreq.RDS"))
+saveRDS(french_functionword_relfreq,
+        file.path(french_data_dir, "french_functionword_relfreq.RDS"))
+```
+
+# Plot and Fit Growth Curves
+
+Plots speaker-level negation rates and fits Bayesian Gompertz curves to child `pct` and `cumulative_ppt` trajectories. Produces fitted child data and lag summaries for onset comparisons.
+
+## Overall Negation
+
+Plots monthly `pct` from `french_wordcategory_relfreq` by `speaker` and fits `french_negation_words_lagModel` to child values. Saves `french_negation_words_childdata` with `predictions` and displays the fitted curve.
+
+```{r negation_plot}
+french_wordcategory_relfreq %>%
+  ggplot(aes(age, pct)) +
+  geom_point() +
+  facet_grid(. ~ speaker) +
+  scale_y_continuous(limits = c(0, 100)) +
+  labs(title = "Negation", x = "Age (Months)", y = "Monthly Percent of Tokens") +
+  theme_bw() +
+  theme(text = element_text(size = 14))
+```
+
+```{r negation_model, include=FALSE}
+french_negation_words_childdata <- french_wordcategory_relfreq %>%
+  filter(speaker == "child") %>%
+  arrange(age)
+
+french_negation_words_lagModel <- french_fit_gompertz(
+  french_negation_words_childdata, "pct", 100, "french_negation_words_lagModel"
+)
+
+french_negation_words_childdata$predictions <-
+  fitted(french_negation_words_lagModel)[, "Estimate"]
+
+saveRDS(french_negation_words_childdata,
+        file.path(french_data_dir, "french_negation_words_childdata.RDS"))
+```
+
+```{r negation_fit_plot}
+french_fit_plot(french_negation_words_childdata, "pct",
+                "Negation", "Monthly Percent of Tokens")
+```
+
+## Individual Negators
+
+Plots `cumulative_ppt` for `pas` and `non` by `speaker` and fits child Gompertz curves for both words and scope-specific `non`. Saves fitted child tables and model objects for word and scope onset comparisons.
+
+```{r word_plot}
+french_functionword_relfreq %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(word ~ speaker, scales = "free_y") +
+  labs(x = "Age (Months)", y = "Cumulative Occurrences per 1,000 Tokens") +
+  theme_bw()
+```
+
+```{r series_models, include=FALSE}
+french_series_models <- c(
+  pas = "french_pas_lagModel",
+  non = "french_non_lagModel",
+  non_sentential = "french_non_sentential_lagModel",
+  non_discourse = "french_non_discourse_lagModel"
+)
+
+french_fits <- imap(french_series_models, function(file_name, series_name) {
+  childdata <- french_series_relfreq %>%
+    filter(series == series_name, speaker == "child") %>%
+    arrange(age)
+  if (!any(childdata$freq > 0)) {
+    stop("No child tokens for ", series_name, " are available for modeling.")
+  }
+  model <- french_fit_gompertz(
+    childdata, "cumulative_ppt",
+    max(5, ceiling(max(childdata$cumulative_ppt) * 2)), file_name
+  )
+  childdata$predictions <- fitted(model)[, "Estimate"]
+  list(data = childdata, model = model)
+})
+
+french_pas_childdata <- french_fits$pas$data %>% rename(word = series)
+french_non_childdata <- french_fits$non$data %>% rename(word = series)
+
+saveRDS(french_pas_childdata,
+        file.path(french_data_dir, "french_pas_childdata.RDS"))
+saveRDS(french_non_childdata,
+        file.path(french_data_dir, "french_non_childdata.RDS"))
+```
+
+```{r word_fit_plots}
+french_pas_plot <- french_fit_plot(french_pas_childdata, "cumulative_ppt",
+                                   "pas", "Cumulative Occurrences per 1,000 Tokens")
+french_non_plot <- french_fit_plot(french_non_childdata, "cumulative_ppt",
+                                   "non", "Cumulative Occurrences per 1,000 Tokens")
+french_pas_plot
+french_non_plot
+```
+
+## Sentential and Discourse Negation
+
+Combines fitted `pas` and `non_sentential` series into `french_sentential_negation_childdata` and the `non_discourse` series into `french_discourse_negation_childdata`. Saves and displays the corresponding observed and fitted scope plots.
+
+```{r scope_curves}
+french_scope_childdata <- function(series_names, scope) {
+  bind_rows(map(french_fits[series_names], "data")) %>%
+    mutate(word = if_else(series == "pas", "pas", "non"),
+           negation_category = word,
+           negation_scope = scope) %>%
+    select(-series) %>%
+    relocate(word)
+}
+
+french_sentential_negation_childdata <-
+  french_scope_childdata(c("pas", "non_sentential"), "sentential")
+french_discourse_negation_childdata <-
+  french_scope_childdata("non_discourse", "discourse")
+
+saveRDS(french_sentential_negation_childdata,
+        file.path(french_data_dir, "french_sentential_negation_childdata.RDS"))
+saveRDS(french_discourse_negation_childdata,
+        file.path(french_data_dir, "french_discourse_negation_childdata.RDS"))
+
+french_sentential_negation_child_plot <- french_fit_plot(
+  french_sentential_negation_childdata, "cumulative_ppt",
+  "Sentential Negation in Children", "Cumulative Occurrences per 1,000 Tokens"
+) + facet_wrap(~ negation_category, ncol = 2, scales = "free_y")
+
+french_discourse_negation_child_plot <- french_fit_plot(
+  french_discourse_negation_childdata, "cumulative_ppt",
+  "Discourse Negation in Children", "Cumulative Occurrences per 1,000 Tokens"
+) + facet_wrap(~ negation_category, ncol = 2, scales = "free_y")
+
+french_save_plot(french_sentential_negation_child_plot,
+                 "french_sentential_negation_child_plot")
+french_save_plot(french_discourse_negation_child_plot,
+                 "french_discourse_negation_child_plot")
 
 french_sentential_negation_child_plot
-```
-
-##### Discourse
-
-Creates, saves, and displays the `non` child plot labeled as discourse negation.
-
-```{r discourse_graph}
-french_discourse_negation_child_plot <- french_plot_child_negation(
-  filter(french_discourse_negation_childdata, negation_category == "non"),
-  "Discourse Negation in Children"
-)
-
-saveRDS(
-  french_discourse_negation_child_plot,
-  file.path(french_data_dir, "french_discourse_negation_child_plot.RDS")
-)
-
 french_discourse_negation_child_plot
 ```
 
-# Age of Production Plot
+# Scope Onset Estimates
 
-Combines the two word-model lag estimates and their 95% credible intervals, saves and displays the table, and displays a point-and-interval plot. Lag is a growth-curve parameter rather than a directly observed first-production age.
+Extracts `lag_Intercept` and 95% credible intervals from `french_fits` into `french_negation_scope_age_of_production`. Saves and displays separate sentential and discourse onset plots.
 
-```{r age_of_production_build}
-french_age_of_production <- bind_rows(
-  french_pas_age_of_production,
-  french_non_age_of_production
-) %>%
-  arrange(Estimate) %>%
-  mutate(word = fct_reorder(word, Estimate))
-
-saveRDS(
-  french_age_of_production,
-  file.path(french_data_dir, "french_age_of_production.RDS")
+```{r scope_onset}
+french_negation_scope_age_of_production <- bind_rows(
+  extract_negation_lag(french_fits$pas$model, "French", "pas", "Sentential"),
+  extract_negation_lag(french_fits$non_sentential$model, "French", "non", "Sentential"),
+  extract_negation_lag(french_fits$non_discourse$model, "French", "non", "Discourse")
 )
 
-french_age_of_production
+saveRDS(french_negation_scope_age_of_production,
+        file.path(french_data_dir, "french_negation_scope_age_of_production.RDS"))
+
+french_sentential_negation_onset_plot <-
+  plot_negation_scope_onset(french_negation_scope_age_of_production, "Sentential")
+french_discourse_negation_onset_plot <-
+  plot_negation_scope_onset(french_negation_scope_age_of_production, "Discourse")
+
+french_save_plot(french_sentential_negation_onset_plot,
+                 "french_sentential_negation_onset_plot")
+french_save_plot(french_discourse_negation_onset_plot,
+                 "french_discourse_negation_onset_plot")
+
+french_negation_scope_age_of_production
+french_sentential_negation_onset_plot
+french_discourse_negation_onset_plot
 ```
 
-```{r age_of_production_plot}
-french_negation_onsetage_plot <-
-  ggplot(french_age_of_production, aes(x = Estimate, y = word)) +
-  geom_pointrange(
-    aes(xmin = Q2.5, xmax = Q97.5)
-  ) +
-  theme_bw() +
-  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
-  labs(
-    x = "Age (Months)",
-    y = ""
-  ) +
-  theme(
-    text = element_text(size = 12),
-    axis.text.y = element_text(size = 12)
-  )
+# Word Onset Estimates
 
-french_negation_onsetage_plot
+Extracts `lag_Intercept` from the `pas` and `non` models into `french_age_of_production` and plots lag estimates with 95% credible intervals. Interprets these values as fitted lag parameters rather than observed first-production ages.
+
+```{r word_onset}
+french_age_of_production <- bind_rows(
+  extract_negation_lag(french_fits$pas$model, "French", "pas", "Word"),
+  extract_negation_lag(french_fits$non$model, "French", "non", "Word")
+) %>%
+  select(word, Estimate, Est.Error, Q2.5, Q97.5) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 1)),
+         word = fct_reorder(word, Estimate))
+
+french_age_of_production
+
+ggplot(french_age_of_production, aes(x = Estimate, y = word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(x = "Age (Months)", y = NULL) +
+  theme_bw() +
+  theme(text = element_text(size = 12))
 ```

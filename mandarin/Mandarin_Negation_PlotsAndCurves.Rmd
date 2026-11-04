@@ -1,0 +1,707 @@
+---
+title: "Mandarin Plots and Curves"
+author: "Samantha Bai"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{xeCJK}
+  - \setCJKmainfont{PingFang SC}
+---
+
+# Setup
+
+Loads packages for frequency summaries, Bayesian Gompertz fits, and plots, and sets `knitr::opts_chunk$set(error = FALSE)`.
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(arrow)
+library(brms)
+library(grid)
+library(gridExtra)
+```
+
+```{r knitr_options}
+knitr::opts_chunk$set(error = FALSE)
+```
+
+# Load Data
+
+Loads `mandarin_tokens_processed` from the processed Feather file with `speaker`, `age`, `negation_category`, and `negation_scope`. Creates `mandarin_model_dir` for cached models.
+
+```{r processedUtterances}
+mandarin_data_dir <- "../mandarin/mandarin_data/processed_data"
+mandarin_model_dir <- "../mandarin/mandarin_model/modeling"
+dir.create(mandarin_model_dir, showWarnings = FALSE, recursive = TRUE)
+
+mandarin_tokens_processed <- read_feather(
+  file.path(mandarin_data_dir, "mandarin_tokens_processed.feather"),
+  col_select = c(speaker, age, negation_category, negation_scope)
+)
+```
+
+# Prepare Negator Tokens
+
+Counts `mandarin_tokens_processed` rows by `speaker` and `age` as `mandarin_speaker_age_totals` and selects rows with nonmissing `negation_category` as `mandarin_negator_tokens`.
+
+- Every 不 counts as 不, including 不是, 不要, and 不知道.
+- Every 没 or traditional 沒 counts as 没, including 没有 and 沒有.
+- A-not-A questions count toward their negator: 是不是 and 好不好 → 不, 有没有 → 没.
+
+```{r negator_tokens}
+# Tokens per speaker and month: the denominator for every rate (ages 0-10 set to zero).
+mandarin_speaker_age_totals <- mandarin_tokens_processed %>%
+  count(speaker, age, name = "total") %>%
+  mutate(total = as.numeric(total)) %>%
+  complete(speaker = "child", age = 0:10, fill = list(total = 0)) %>%
+  mutate(total = if_else(speaker == "child" & age <= 10, 0, total))
+
+# One row per negator token (bu -> 不, mei -> 没).
+mandarin_negator_tokens <- mandarin_tokens_processed %>%
+  filter(!is.na(negation_category)) %>%
+  mutate(word = if_else(negation_category == "bu", "不", "没"))
+
+count(mandarin_negator_tokens, word, negation_scope)
+```
+
+# Calculate Relative Frequencies
+
+Calculates monthly and cumulative negation rates using `mandarin_speaker_age_totals` as the denominator. Sets child counts and denominator contributions at ages 0–10 to zero.
+
+## Overall Negation Rates
+
+Calculates monthly `pct` and cumulative `cumulative_pct` for `mandarin_negator_tokens` by `speaker` and `age`. Saves the resulting `mandarin_negation_relfreq` table.
+
+```{r negation_relfreq}
+mandarin_negation_relfreq <- mandarin_speaker_age_totals %>%
+  left_join(
+    count(mandarin_negator_tokens, speaker, age, name = "freq"),
+    by = c("speaker", "age")
+  ) %>%
+  mutate(
+    freq = replace_na(freq, 0L),
+    freq = if_else(speaker == "child" & age <= 10, 0L, freq),
+    relfreq = if_else(total == 0, 0, freq / total),
+    pct = relfreq * 100
+  ) %>%
+  group_by(speaker) %>%
+  arrange(age, .by_group = TRUE) %>%
+  mutate(
+    cum_freq = cumsum(freq),
+    cum_total = cumsum(total),
+    cumulative_relfreq = if_else(cum_total == 0, 0, cum_freq / cum_total),
+    cumulative_pct = cumulative_relfreq * 100
+  ) %>%
+  ungroup()
+
+saveRDS(mandarin_negation_relfreq, file.path(mandarin_data_dir, "mandarin_negation_relfreq.RDS"))
+```
+
+## Individual Negator Rates
+
+Calculates monthly `ppt` and cumulative `cumulative_ppt` by `word` in `mandarin_functionword_relfreq`. Retains child ages 0–10 and later months with positive counts in each word-specific cumulative denominator.
+
+```{r functionword_relfreq}
+mandarin_functionword_relfreq <- mandarin_negator_tokens %>%
+  count(word, speaker, age, name = "freq") %>%
+  complete(word, speaker = "child", age = 0:10, fill = list(freq = 0L)) %>%
+  mutate(freq = if_else(speaker == "child" & age <= 10, 0L, freq)) %>%
+  left_join(mandarin_speaker_age_totals, by = c("speaker", "age")) %>%
+  mutate(
+    total = replace_na(total, 0),
+    relfreq = if_else(total == 0, 0, freq / total),
+    ppt = relfreq * 1000
+  ) %>%
+  filter(freq > 0 | (speaker == "child" & age %in% 0:10)) %>%
+  group_by(word, speaker) %>%
+  arrange(age, .by_group = TRUE) %>%
+  mutate(
+    cum_freq = cumsum(freq),
+    cum_total = cumsum(total),
+    cumulative_relfreq = if_else(cum_total == 0, 0, cum_freq / cum_total),
+    cumulative_ppt = cumulative_relfreq * 1000
+  ) %>%
+  ungroup() %>%
+  select(word, speaker, age, freq, total, relfreq, ppt,
+         cum_freq, cum_total, cumulative_relfreq, cumulative_ppt)
+
+saveRDS(mandarin_functionword_relfreq, file.path(mandarin_data_dir, "mandarin_functionword_relfreq.RDS"))
+```
+
+# Plot and Fit Growth Curves
+
+Plots speaker-level negation rates and fits Bayesian Gompertz curves to child `pct` and `cumulative_ppt` trajectories. Produces fitted child data and lag summaries for onset comparisons.
+
+## Overall Negation
+
+Plots monthly `pct` from `mandarin_negation_relfreq` by `speaker` and fits `mandarin_negation_lagModel` to child values. Saves `mandarin_negation_childdata` with `predictions` and displays the fitted curve.
+
+```{r negation_overall_plot}
+mandarin_negation_overall_plot <-
+  mandarin_negation_relfreq %>%
+  ggplot(aes(age, pct)) +
+  geom_point() +
+  facet_grid(. ~ speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Monthly Percent of Tokens") +
+  theme(text = element_text(size = 14))
+
+mandarin_negation_overall_plot
+```
+
+```{r negation_overall_growth_model, include=FALSE}
+mandarin_negation_lagModel <- brm(
+  bf(pct ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(mandarin_negation_relfreq, speaker == "child"),
+  prior = c(
+    prior(uniform(0, 100), nlpar = "upperAsymptote", lb = 0, ub = 100),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+  file = file.path(mandarin_model_dir, "mandarin_negation_lagModel"),
+  file_refit = "on_change",
+  iter = 10000)
+```
+
+```{r negation_overall_predictions}
+mandarin_negation_childdata <- filter(mandarin_negation_relfreq, speaker == "child")
+mandarin_negation_childdata$predictions <- fitted(mandarin_negation_lagModel)[, "Estimate"]
+
+saveRDS(mandarin_negation_childdata, file.path(mandarin_data_dir, "mandarin_negation_childdata.RDS"))
+```
+
+```{r negation_overall_prediction_plot}
+mandarin_negation_fit_plot <-
+  ggplot(mandarin_negation_childdata, aes(x = age, y = pct)) +
+  geom_point(size = 2) +
+  geom_line(aes(y = predictions), color = "blue", linewidth = 1) +
+  theme_bw() +
+  labs(title = "Negation", x = "Child Age (Month)", y = "Monthly Percent of Tokens") +
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14)
+  )
+
+mandarin_negation_fit_plot
+```
+
+## Individual Negators
+
+Plots `cumulative_ppt` for `不` and `没` by `speaker` and fits child Gompertz curves. Saves fitted child tables and model objects for the word onset comparison.
+
+### 不 bù
+
+Plots `cumulative_ppt` for `不` and fits `mandarin_bu_lagModel` to child data. Saves `mandarin_bu_childdata` with `predictions` and records the model lag summary.
+
+```{r bu_plot, echo=FALSE}
+mandarin_functionword_relfreq %>%
+  filter(word=="不") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("不 bù") +
+  xlab("Age (Months)") + ylab("Cumulative Occurrences per 1,000 Tokens")
+```
+
+```{r bu_growth_model, include=FALSE}
+mandarin_bu_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(mandarin_functionword_relfreq, word=="不", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 40), nlpar = "upperAsymptote", lb = 0, ub = 40),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+  file = file.path(mandarin_model_dir, "mandarin_bu_lagModel"),
+  file_refit = "on_change",
+  iter = 10000,
+  seed = 16)
+```
+
+```{r bu_predictions}
+mandarin_bu_predictions <- as.data.frame(fitted(mandarin_bu_lagModel))
+
+mandarin_bu_childdata <- filter(mandarin_functionword_relfreq, word=="不", speaker=="child")
+mandarin_bu_childdata$predictions <- mandarin_bu_predictions[, "Estimate"]
+
+saveRDS(mandarin_bu_childdata, file.path(mandarin_data_dir, "mandarin_bu_childdata.RDS"))
+```
+
+```{r bu_age_of_production}
+mandarin_bu_age_of_production <- data.frame(word = c("不 bù"), 
+           Estimate = c(round(fixef(mandarin_bu_lagModel)[3,1],1)),
+           Est.Error = c(round(fixef(mandarin_bu_lagModel)[3,2],1)),
+           Q2.5 = c(round(fixef(mandarin_bu_lagModel)[3,3],1)),
+           Q97.5 = c(round(fixef(mandarin_bu_lagModel)[3,4],1))
+           )
+```
+
+```{r bu_prediction_plot}
+mandarin_bu_plot <-
+  ggplot(mandarin_bu_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), linewidth = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="不 bù", x="Child Age (Month)", y="Cumulative Occurrences per 1,000 Tokens") +
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+
+### 没 méi
+
+Plots `cumulative_ppt` for `没` and fits `mandarin_mei_lagModel` to child data. Saves `mandarin_mei_childdata` with `predictions` and records the model lag summary.
+
+```{r mei_plot, echo=FALSE}
+mandarin_functionword_relfreq %>%
+  filter(word=="没") %>%
+  ggplot(aes(age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  ggtitle("没 méi") +
+  xlab("Age (Months)") + ylab("Cumulative Occurrences per 1,000 Tokens")
+```
+
+```{r mei_growth_model, include=FALSE}
+mandarin_mei_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(mandarin_functionword_relfreq, word=="没", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 20), nlpar = "upperAsymptote", lb = 0, ub = 20),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+  file = file.path(mandarin_model_dir, "mandarin_mei_lagModel"),
+  file_refit = "on_change",
+  iter = 10000,
+  seed = 16)
+```
+
+```{r mei_predictions}
+mandarin_mei_predictions <- as.data.frame(fitted(mandarin_mei_lagModel))
+
+mandarin_mei_childdata <- filter(mandarin_functionword_relfreq, word=="没", speaker=="child")
+mandarin_mei_childdata$predictions <- mandarin_mei_predictions[, "Estimate"]
+
+saveRDS(mandarin_mei_childdata, file.path(mandarin_data_dir, "mandarin_mei_childdata.RDS"))
+```
+
+```{r mei_age_of_production}
+mandarin_mei_age_of_production <- data.frame(word      = "没 méi",
+             Estimate  = round(fixef(mandarin_mei_lagModel)[3, 1], 1),
+             Est.Error = round(fixef(mandarin_mei_lagModel)[3, 2], 1),
+             Q2.5      = round(fixef(mandarin_mei_lagModel)[3, 3], 1),
+             Q97.5     = round(fixef(mandarin_mei_lagModel)[3, 4], 1),
+             stringsAsFactors = FALSE)
+```
+
+```{r mei_prediction_plot}
+mandarin_mei_plot <-
+  ggplot(mandarin_mei_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), linewidth = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="没 méi", x="Child Age (Month)", y="Cumulative Occurrences per 1,000 Tokens") +
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```
+
+## Sentential and Discourse Negation
+
+Calculates scope-specific `cumulative_ppt` and fits child Gompertz curves by `negation_scope` and `negation_category`. Saves fitted child tables and scope onset summaries.
+
+### Calculate Scope Rates
+
+Calculates `cumulative_ppt` by `negation_scope` and `negation_category` from `mandarin_negator_tokens` against `mandarin_child_age_totals`. Saves `mandarin_negation_scope_relfreq`.
+
+```{r negation_scope_data, include=FALSE}
+mandarin_negation_words <- c("不", "没")
+mandarin_negation_labels <- c("不 bù", "没 méi")
+mandarin_negation_model_names <- c("不" = "bu", "没" = "mei")
+mandarin_negation_asymptotes <- c("不" = 40, "没" = 20)
+
+# Child word tokens per month (ages 0-10 are already zero).
+mandarin_child_age_totals <- mandarin_speaker_age_totals %>%
+  filter(speaker == "child") %>%
+  select(age, total) %>%
+  arrange(age)
+
+# Each negator takes the type of its utterance; mixed utterances are left out.
+mandarin_scope_counts <- mandarin_negator_tokens %>%
+  filter(speaker == "child", negation_scope %in% c("sentential", "discourse")) %>%
+  count(negation_scope, negation_category = word, age, name = "freq")
+
+mandarin_negation_scope_relfreq <- tidyr::crossing(
+  negation_scope = c("sentential", "discourse"),
+  negation_category = mandarin_negation_words,
+  mandarin_child_age_totals
+) %>%
+  left_join(
+    mandarin_scope_counts,
+    by = c("negation_scope", "negation_category", "age")
+  ) %>%
+  mutate(
+    speaker = "child",
+    freq = replace_na(freq, 0L),
+    freq = if_else(age <= 10, 0L, freq),
+    relfreq = if_else(total == 0, 0, freq / total),
+    ppt = relfreq * 1000
+  ) %>%
+  filter(freq > 0 | age %in% 0:10) %>%
+  group_by(negation_scope, negation_category) %>%
+  arrange(age, .by_group = TRUE) %>%
+  mutate(
+    cum_freq = cumsum(freq),
+    cum_total = cumsum(total),
+    cumulative_relfreq = if_else(cum_total == 0, 0, cum_freq / cum_total),
+    cumulative_ppt = cumulative_relfreq * 1000
+  ) %>%
+  ungroup()
+
+mandarin_sentential_negation_childdata <- mandarin_negation_scope_relfreq %>%
+  filter(negation_scope == "sentential")
+
+mandarin_discourse_negation_childdata <- mandarin_negation_scope_relfreq %>%
+  filter(negation_scope == "discourse")
+
+saveRDS(
+  mandarin_negation_scope_relfreq,
+  file.path(mandarin_data_dir, "mandarin_negation_scope_relfreq.RDS")
+)
+```
+
+### Fit Scope Curves
+
+Fits Gompertz curves to scope series with positive `cumulative_ppt` and saves `mandarin_sentential_negation_childdata` and `mandarin_discourse_negation_childdata` with `predictions`.
+
+```{r negation_scope_curve_data, include=FALSE}
+# Use the same per-word asymptote limits as the individual Mandarin models.
+mandarin_fit_scope_growth <- function(scope_data, scope_name) {
+  if (nrow(scope_data) == 0L ||
+      !all(scope_data$negation_category %in% mandarin_negation_words)) {
+    stop("Invalid Mandarin scope data. Run negation_scope_data first.")
+  }
+
+  purrr::map_dfr(mandarin_negation_words, function(w) {
+    word_data <- scope_data %>%
+      filter(
+        negation_category == w,
+        is.finite(age),
+        is.finite(cumulative_ppt)
+      ) %>%
+      arrange(age)
+
+    word_data$predictions <- rep(NA_real_, nrow(word_data))
+
+    # Keep observed zeros, without fitting a model to an all-zero series.
+    if (nrow(word_data) == 0L || !any(word_data$cumulative_ppt > 0)) {
+      return(word_data)
+    }
+
+    asymptote <- mandarin_negation_asymptotes[[w]]
+    model <- brms::brm(
+      brms::bf(
+        cumulative_ppt ~ upperAsymptote *
+          exp(-exp(((growthRate * exp(1)) / upperAsymptote) * (lag - age) + 1)),
+        upperAsymptote ~ 1,
+        growthRate ~ 1,
+        lag ~ 1,
+        nl = TRUE
+      ),
+      data = word_data,
+      prior = c(
+        brms::set_prior(
+          sprintf("uniform(0, %s)", asymptote),
+          nlpar = "upperAsymptote", lb = 0, ub = asymptote
+        ),
+        brms::set_prior("uniform(0, 10)", nlpar = "growthRate", lb = 0, ub = 10),
+        brms::set_prior("uniform(10, 72)", nlpar = "lag", lb = 10, ub = 72)
+      ),
+      # A Mandarin prefix also separates these caches from the older scope fits.
+      file = file.path(
+        mandarin_model_dir,
+        paste0(
+          "mandarin_", mandarin_negation_model_names[[w]], "_",
+          scope_name, "_lagModel"
+        )
+      ),
+      file_refit = "on_change",
+      iter = 10000,
+      seed = 1234
+    )
+
+    word_data$predictions <- fitted(model, newdata = word_data)[, "Estimate"]
+    word_data
+  })
+}
+
+mandarin_sentential_negation_childdata <- mandarin_fit_scope_growth(
+  mandarin_sentential_negation_childdata, "sentential"
+)
+
+mandarin_discourse_negation_childdata <- mandarin_fit_scope_growth(
+  mandarin_discourse_negation_childdata, "discourse"
+)
+
+saveRDS(
+  mandarin_sentential_negation_childdata,
+  file.path(mandarin_data_dir, "mandarin_sentential_negation_childdata.RDS")
+)
+
+saveRDS(
+  mandarin_discourse_negation_childdata,
+  file.path(mandarin_data_dir, "mandarin_discourse_negation_childdata.RDS")
+)
+
+mandarin_plot_child_negation <- function(plot_data, plot_title) {
+  if (nrow(plot_data) == 0L ||
+      !all(plot_data$negation_category %in% mandarin_negation_words)) {
+    stop("Invalid Mandarin plotting data. Rebuild the Mandarin scope tables first.")
+  }
+
+  ggplot(plot_data, aes(x = age, y = cumulative_ppt)) +
+    geom_point(color = "black", size = 2) +
+    geom_line(aes(y = predictions), color = "blue", linewidth = 1, na.rm = TRUE) +
+    facet_wrap(
+      ~ negation_category,
+      ncol = 2,
+      scales = "free_y",
+      labeller = as_labeller(
+        setNames(mandarin_negation_labels, mandarin_negation_words)
+      )
+    ) +
+    scale_x_continuous(breaks = seq(0, 72, 12)) +
+    scale_y_continuous(limits = c(0, NA)) +
+    labs(
+      title = plot_title,
+      x = "Child Age (Months)",
+      y = "Cumulative Occurrences per 1,000 Tokens"
+    ) +
+    theme_bw() +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(size = 20, hjust = 0.5),
+      strip.text = element_text(size = 16),
+      axis.title = element_text(size = 16),
+      axis.text = element_text(size = 14)
+    )
+}
+```
+
+### Estimate Scope Onsets
+
+Extracts `lag_Intercept` and 95% credible intervals from fitted scope models into `mandarin_negation_scope_age_of_production`. Saves the scope onset table as RDS.
+
+```{r scope_age_of_production}
+extract_scope_onsets <- function(scope_data, scope_name) {
+
+  # Include only word/scope pairs with fitted curves.
+  fitted_words <- scope_data %>%
+    filter(is.finite(predictions)) %>%
+    distinct(negation_category) %>%
+    pull(negation_category)
+
+  purrr::map_dfr(fitted_words, function(w) {
+
+    model_path <- file.path(
+      mandarin_model_dir,
+      paste0(
+        "mandarin_", mandarin_negation_model_names[[w]],
+        "_", scope_name, "_lagModel.rds"
+      )
+    )
+
+    if (!file.exists(model_path)) {
+      stop("Missing scope model: ", model_path)
+    }
+
+    model <- readRDS(model_path)
+    model_summary <- brms::fixef(model)
+
+    if (!"lag_Intercept" %in% rownames(model_summary)) {
+      stop("Cannot find lag_Intercept in: ", model_path)
+    }
+
+    lag_summary <- model_summary["lag_Intercept", ]
+
+    tibble(
+      language = "Mandarin",
+      category = stringr::str_to_title(scope_name),
+      word = mandarin_negation_labels[
+        match(w, mandarin_negation_words)
+      ],
+      Estimate = unname(lag_summary["Estimate"]),
+      Est.Error = unname(lag_summary["Est.Error"]),
+      Q2.5 = unname(lag_summary["Q2.5"]),
+      Q97.5 = unname(lag_summary["Q97.5"])
+    )
+  })
+}
+
+mandarin_negation_scope_age_of_production <- bind_rows(
+  extract_scope_onsets(
+    mandarin_sentential_negation_childdata,
+    "sentential"
+  ),
+  extract_scope_onsets(
+    mandarin_discourse_negation_childdata,
+    "discourse"
+  )
+)
+
+if (nrow(mandarin_negation_scope_age_of_production) == 0L) {
+  stop("No fitted scope models available. Run the scope-model chunks first.")
+}
+
+saveRDS(
+  mandarin_negation_scope_age_of_production,
+  file.path(
+    mandarin_data_dir,
+    "mandarin_negation_scope_age_of_production.RDS"
+  )
+)
+```
+
+### Plot Sentential Curves
+
+Plots observed `cumulative_ppt` and fitted `predictions` from `mandarin_sentential_negation_childdata` by `negation_category`. Saves `mandarin_sentential_negation_child_plot` as RDS.
+
+```{r sentential_graph}
+mandarin_sentential_negation_child_plot <- mandarin_plot_child_negation(
+  mandarin_sentential_negation_childdata, "Sentential Negation in Children"
+)
+
+saveRDS(
+  mandarin_sentential_negation_child_plot,
+  file.path(mandarin_data_dir, "mandarin_sentential_negation_child_plot.RDS")
+)
+
+mandarin_sentential_negation_child_plot
+```
+
+### Plot Discourse Curves
+
+Plots observed `cumulative_ppt` and fitted `predictions` from `mandarin_discourse_negation_childdata` by `negation_category`. Saves `mandarin_discourse_negation_child_plot` as RDS.
+
+```{r discourse_graph}
+mandarin_discourse_negation_child_plot <- mandarin_plot_child_negation(
+  mandarin_discourse_negation_childdata, "Discourse Negation in Children"
+)
+
+saveRDS(
+  mandarin_discourse_negation_child_plot,
+  file.path(mandarin_data_dir, "mandarin_discourse_negation_child_plot.RDS")
+)
+mandarin_discourse_negation_child_plot
+```
+
+### Plot Scope Onsets
+
+Plots `mandarin_negation_scope_age_of_production` lag estimates and 95% credible intervals separately for sentential and discourse categories. Saves `mandarin_sentential_negation_onset_plot` and `mandarin_discourse_negation_onset_plot` as RDS.
+
+```{r categorize_onset}
+plot_scope_onset <- function(category_name) {
+
+  mandarin_negation_scope_age_of_production %>%
+    filter(category == category_name) %>%
+    mutate(word = forcats::fct_reorder(word, Estimate)) %>%
+    ggplot(aes(x = Estimate, y = word)) +
+    geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+    scale_x_continuous(breaks = seq(0, 72, by = 6)) +
+    coord_cartesian(xlim = c(0, 72)) +
+    labs(
+      title = paste("Mandarin", category_name, "Negation"),
+      x = "Fitted lag (months)",
+      y = NULL
+    ) +
+    theme_bw(base_size = 12)
+}
+
+# Create the two plot objects.
+mandarin_sentential_negation_onset_plot <-
+  plot_scope_onset("Sentential")
+
+mandarin_discourse_negation_onset_plot <-
+  plot_scope_onset("Discourse")
+
+
+# Save the plot objects for reuse in R.
+saveRDS(
+  mandarin_sentential_negation_onset_plot,
+  file.path(
+    mandarin_data_dir,
+    "mandarin_sentential_negation_onset_plot.RDS"
+  )
+)
+
+saveRDS(
+  mandarin_discourse_negation_onset_plot,
+  file.path(
+    mandarin_data_dir,
+    "mandarin_discourse_negation_onset_plot.RDS"
+  )
+)
+
+# Display both graphs in the knitted document.
+mandarin_sentential_negation_onset_plot
+mandarin_discourse_negation_onset_plot
+```
+
+# Word Onset Estimates
+
+Combines `mandarin_bu_age_of_production` and `mandarin_mei_age_of_production` into `mandarin_age_of_production` and plots lag estimates with 95% credible intervals. Interprets these values as fitted lag parameters rather than observed first-production ages.
+
+```{r age_of_production_build}
+mandarin_age_of_production <- bind_rows(
+  mandarin_bu_age_of_production,
+  mandarin_mei_age_of_production
+) %>%
+  mutate(word = fct_reorder(word, Estimate))
+
+saveRDS(mandarin_age_of_production, file.path(mandarin_data_dir, "mandarin_age_of_production.RDS"))
+```
+
+```{r age_of_production_plot}
+mandarin_functionword_onsetage_plot <-
+  mandarin_age_of_production %>%
+  ggplot(aes(x = Estimate, y = word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  scale_x_continuous(breaks = seq(0, 72, by = 6)) +
+  labs(x = "Age (Months)", y = "") +
+  theme(text = element_text(size = 12), axis.text.y = element_text(size = 12))
+
+mandarin_functionword_onsetage_plot
+```

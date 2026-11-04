@@ -5,13 +5,13 @@ date: "`r Sys.Date()`"
 output: pdf_document
 ---
 
-# How to Use This File
+# Overview
 
-Runs the English extraction from CHILDES token import through negation coding to the processed Feather export. Set the working directory to `english`, install `childesr`, `tidyverse`, and `arrow`, then run chunks in order. Matching raw caches are reused unless `english_force_download` is `TRUE`; the final file is `english_data/processed_data/english_tokens_processed.feather`.
+Runs the English extraction from CHILDES tokens through negation coding to `english_data/processed_data/english_tokens_processed.feather`. Uses `english` as the working directory with `childesr`, `tidyverse`, and `arrow`, and reuses corpus caches unless `english_force_download` is `TRUE`.
 
 # Setup
 
-Loads the packages, sets knitr options, and creates relative raw and processed data directories.
+Loads `childesr`, `tidyverse`, and `arrow`, configures knitr, and creates `english_raw_dir` and `english_processed_dir`.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -28,7 +28,6 @@ library(arrow)
 ```{r directories}
 english_db_version <- "2026.1"
 english_force_download <- FALSE
-english_write_combined_csv <- FALSE
 
 english_data_root <- "english_data"
 
@@ -41,329 +40,168 @@ dir.create(english_processed_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Load Data
 
-Loads the selected English corpora from CHILDES release 2026.1 or matching local caches. Validates the imported columns and cache source record before token processing.
+Selects CHILDES source corpora and imports tokens into `english_all_tokens` for annotation.
+
+## Select Corpora
+
+Selects the Eng-NA and Eng-UK collections in `english_collections` for CHILDES release `english_db_version`.
 
 ```{r collections}
 english_collections <- c("Eng-NA", "Eng-UK")
 ```
 
-## Cache Helpers
+## Import Data
 
-Defines query metadata, cache paths, and validation helpers for combined and per-corpus files.
+Downloads or reuses corpus-level English tokens in `english_all_tokens` and checks required columns before combining cached batches.
 
-```{r cache_helpers}
-english_feather_path <- file.path(english_raw_dir, "all_english_tokens.feather")
-english_csv_path <- file.path(english_raw_dir, "all_english_tokens.csv")
-english_source_info_path <- file.path(english_raw_dir, "all_english_tokens_source.rds")
-english_batch_dir <- file.path(english_raw_dir, paste0("corpus_batches_", english_db_version))
-english_manifest_path <- file.path(english_batch_dir, "corpus_manifest.rds")
-english_status_path <- file.path(english_raw_dir, "english_download_status.csv")
-dir.create(english_batch_dir, showWarnings = FALSE, recursive = TRUE)
+```{r import_tokens}
+english_query_roles <- NULL
 
-english_query_roles <- c("Target_Child", "Mother", "Father")
-english_query_info <- list(
-  db_version = english_db_version,
-  collection = sort(english_collections),
-  role = sort(english_query_roles),
-  token = "%",
-  replace = TRUE
+english_batch_dir <- file.path(
+  english_raw_dir,
+  paste0("corpus_batches_", english_db_version)
 )
 
+english_corpora_path <- file.path(english_batch_dir, "corpus_list.csv")
+dir.create(english_batch_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Corpus list for the collections: fetched once, then reused from disk.
+if (!english_force_download && file.exists(english_corpora_path)) {
+  english_corpora <- readr::read_csv(english_corpora_path, show_col_types = FALSE)
+} else {
+  english_corpora <- childesr::get_transcripts(
+    collection = english_collections,
+    db_version = english_db_version
+  ) %>%
+    distinct(collection_name, corpus_name, corpus_id) %>%
+    arrange(collection_name, corpus_name)
+  readr::write_csv(english_corpora, english_corpora_path)
+}
+
+english_batch_files <- file.path(
+  english_batch_dir,
+  paste0(english_corpora$collection_name, "_", english_corpora$corpus_id, ".feather")
+)
+
+# Columns every corpus file must have.
 english_required_columns <- c(
   "target_child_id", "target_child_age", "transcript_id", "utterance_id",
   "token_order", "gloss", "part_of_speech", "speaker_role",
   "speaker_code", "utterance_type"
 )
 
-english_read_source_info <- function(path) {
-  if (!file.exists(path)) return(NULL)
-  tryCatch(readRDS(path), error = function(e) NULL)
+# A saved batch is usable if the file exists and has the required columns.
+english_batch_is_valid <- function(path) {
+  if (!file.exists(path)) return(FALSE)
+  saved_columns <- names(arrow::open_dataset(path, format = "ipc"))
+  all(english_required_columns %in% saved_columns)
 }
 
-english_source_matches <- function(info, expected_query) {
-  is.list(info) && identical(info$query, expected_query) &&
-    is.numeric(info$row_count) && length(info$row_count) == 1L &&
-    is.finite(info$row_count) && info$row_count >= 0
+# Write to a temporary file first, then rename it.
+# If R stops mid-write, no half-written batch is left behind.
+english_save_batch <- function(data, path) {
+  temp_path <- paste0(path, ".tmp")
+  arrow::write_feather(data, temp_path)
+  if (!file.rename(temp_path, path)) stop("Could not save: ", path)
 }
 
-english_validate_tokens <- function(tokens, allow_empty = FALSE) {
-  if (is.null(tokens) || !is.data.frame(tokens)) {
-    stop("The request returned no data table; this is not a completed batch.")
-  }
-  english_missing_columns <- setdiff(english_required_columns, names(tokens))
-  if (length(english_missing_columns) > 0L) {
-    stop("Required columns missing: ", paste(english_missing_columns, collapse = ", "))
-  }
-  if (!is.numeric(tokens$target_child_age)) {
-    stop("target_child_age must be numeric and measured in months.")
-  }
-  if (!allow_empty && nrow(tokens) == 0L) stop("No tokens returned.")
-  invisible(TRUE)
-}
+english_failed <- character()
 
-# Read just one column to check the saved row count, without loading all tokens.
-english_usable_feather_cache <- function(path, info, expected_query) {
-  if (!file.exists(path) || !english_source_matches(info, expected_query)) {
-    return(FALSE)
-  }
-  tryCatch({
-    ids <- arrow::read_feather(path, col_select = "target_child_id")
-    nrow(ids) == info$row_count
-  }, error = function(e) FALSE)
-}
-
-# Write temporary files first; publish the source record only after the data.
-english_save_token_cache <- function(tokens, path, info_path, expected_query) {
-  temp_data <- tempfile("tokens_", tmpdir = dirname(path))
-  temp_info <- tempfile("source_", tmpdir = dirname(info_path))
-  on.exit(unlink(c(temp_data, temp_info)), add = TRUE)
-
-  arrow::write_feather(tokens, temp_data)
-  saveRDS(
-    list(
-      query = expected_query,
-      downloaded_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
-      childesr_version = as.character(utils::packageVersion("childesr")),
-      cache_format = "feather",
-      row_count = nrow(tokens)
-    ),
-    temp_info
+for (i in seq_len(nrow(english_corpora))) {
+  path <- english_batch_files[[i]]
+  corpus_label <- paste(
+    english_corpora$collection_name[[i]], english_corpora$corpus_name[[i]],
+    sep = " / "
   )
+  message(sprintf("[%d/%d] %s", i, nrow(english_corpora), corpus_label))
 
-  # Invalidate an older source record before replacing its data file.
-  if (file.exists(info_path) && unlink(info_path) != 0L) {
-    stop("Could not replace the source record: ", info_path)
-  }
-  if (!file.rename(temp_data, path)) stop("Could not save data to: ", path)
-  if (!file.rename(temp_info, info_path)) {
-    stop("Could not save the source record: ", info_path)
-  }
-}
+  # Already saved: reuse it.
+  if (!english_force_download && english_batch_is_valid(path)) next
 
-english_cache_info <- english_read_source_info(english_source_info_path)
-english_complete_feather_available <- !english_force_download &&
-  english_usable_feather_cache(english_feather_path, english_cache_info, english_query_info)
-english_complete_csv_available <- !english_force_download &&
-  english_source_matches(english_cache_info, english_query_info) && file.exists(english_csv_path) &&
-  is.null(english_cache_info$cache_format) &&
-  !file.exists(english_feather_path)
-english_complete_cache_available <- english_complete_feather_available || english_complete_csv_available
-```
-
-## Download Corpus Batches
-
-Reuses matching corpus batches or downloads one corpus at a time, recording progress and failures.
-
-```{r download_corpora}
-if (!english_complete_cache_available) {
-  english_manifest_info <- english_read_source_info(english_manifest_path)
-
-  if (!english_force_download && is.list(english_manifest_info) &&
-      identical(english_manifest_info$query, english_query_info) &&
-      is.data.frame(english_manifest_info$corpora)) {
-    english_corpora <- english_manifest_info$corpora
-  } else {
-    message("Retrieving the English corpus list from transcript metadata...")
-    english_transcripts <- childesr::get_transcripts(
-      collection = english_collections,
+  # tryCatch turns an error into a message so the loop moves on.
+  tokens <- tryCatch(
+    childesr::get_tokens(
+      collection = english_corpora$collection_name[[i]],
+      corpus = english_corpora$corpus_name[[i]],
+      role = english_query_roles,
+      token = "%",
+      replace = TRUE,
       db_version = english_db_version
-    )
-    english_metadata_columns <- c("collection_name", "corpus_name", "corpus_id")
-    if (is.null(english_transcripts) ||
-        !all(english_metadata_columns %in% names(english_transcripts))) {
-      stop("Transcript metadata could not be retrieved. Rerun this chunk.")
-    }
-
-    english_corpora <- english_transcripts %>%
-      distinct(collection_name, corpus_name, corpus_id) %>%
-      arrange(
-        desc(collection_name == "Eng-NA" & corpus_name == "Brown"),
-        collection_name, corpus_name
-      )
-    rm(english_transcripts)
-
-    if (nrow(english_corpora) == 0L || anyNA(english_corpora)) {
-      stop("The English corpus list is empty or has missing identifiers.")
-    }
-    saveRDS(list(query = english_query_info, corpora = english_corpora), english_manifest_path)
-  }
-
-  english_manifest_columns <- c("collection_name", "corpus_name", "corpus_id")
-  if (!all(english_manifest_columns %in% names(english_corpora)) ||
-      nrow(english_corpora) == 0L || anyNA(english_corpora) ||
-      !all(english_corpora$collection_name %in% english_collections) ||
-      anyDuplicated(english_corpora[c("collection_name", "corpus_name")])) {
-    stop("The corpus manifest is invalid. Remove corpus_manifest.rds and rerun.")
-  }
-
-  # IDs are safe here because the batch folder is specific to db_version.
-  english_batch_files <- file.path(
-    english_batch_dir,
-    paste0(english_corpora$collection_name, "_", english_corpora$corpus_id,
-           ".feather")
+    ),
+    error = function(e) conditionMessage(e)
   )
-  english_batch_sources <- sub("\\.feather$", "_source.rds", english_batch_files)
-  english_download_status <- english_corpora %>%
-    mutate(status = "pending", n_tokens = NA_real_, error = NA_character_)
 
-  for (i in seq_len(nrow(english_corpora))) {
-    english_batch_query <- english_query_info
-    english_batch_query$collection <- english_corpora$collection_name[[i]]
-    english_batch_query$corpus <- english_corpora$corpus_name[[i]]
-    english_batch_info <- english_read_source_info(english_batch_sources[[i]])
-
-    message(sprintf(
-      "[%d/%d] %s / %s",
-      i, nrow(english_corpora), english_batch_query$collection, english_batch_query$corpus
-    ))
-
-    if (!english_force_download && english_usable_feather_cache(
-      english_batch_files[[i]], english_batch_info, english_batch_query
-    )) {
-      english_download_status$status[[i]] <- "cached"
-      english_download_status$n_tokens[[i]] <- english_batch_info$row_count
-      message("  Reusing completed batch: ", english_batch_info$row_count, " tokens.")
-    } else {
-      # childesr handles request retries internally. A failure is recorded here
-      # so that the next corpus can still be downloaded.
-      english_batch_result <- tryCatch({
-        english_batch_tokens <- do.call(childesr::get_tokens, english_batch_query)
-        english_validate_tokens(english_batch_tokens, allow_empty = TRUE)
-        list(tokens = english_batch_tokens, error = NULL)
-      }, error = function(e) list(tokens = NULL, error = conditionMessage(e)))
-
-      if (!is.null(english_batch_result$error)) {
-        english_download_status$status[[i]] <- "failed"
-        english_download_status$error[[i]] <- english_batch_result$error
-        message("  FAILED: ", english_batch_result$error)
-      } else {
-        # A local save failure stops immediately, leaving earlier batches intact.
-        english_save_token_cache(
-          english_batch_result$tokens, english_batch_files[[i]],
-          english_batch_sources[[i]], english_batch_query
-        )
-        english_download_status$status[[i]] <- "downloaded"
-        english_download_status$n_tokens[[i]] <- nrow(english_batch_result$tokens)
-        message("  Saved ", nrow(english_batch_result$tokens), " tokens.")
-      }
-      rm(english_batch_result)
-      # Release each corpus before starting another one.
-      if (exists("english_batch_tokens", inherits = FALSE)) rm(english_batch_tokens)
-      invisible(gc(verbose = FALSE))
-    }
-    readr::write_csv(english_download_status, english_status_path)
-  }
-
-  english_failed_corpora <- english_download_status %>% filter(status == "failed")
-  if (nrow(english_failed_corpora) > 0L) {
-    print(english_failed_corpora %>% select(collection_name, corpus_name, error))
-    stop(
-      "Some corpora failed. Completed batches have been saved. ",
-      "Keep english_force_download <- FALSE and rerun download_corpora. ",
-      "No combined dataset was created. Status file: ", english_status_path
+  if (is.character(tokens)) {
+    english_failed <- c(english_failed, corpus_label)
+    message("  FAILED: ", tokens)
+  } else if (is.null(tokens) || nrow(tokens) == 0L) {
+    message("  No tokens returned.")
+  } else if (!all(english_required_columns %in% names(tokens))) {
+    english_failed <- c(english_failed, corpus_label)
+    message(
+      "  FAILED: missing columns ",
+      paste(setdiff(english_required_columns, names(tokens)), collapse = ", ")
     )
+  } else {
+    english_save_batch(tokens, path)
+    message("  Saved ", nrow(tokens), " tokens.")
   }
-  message("All corpus downloads are complete and saved.")
-  english_download_status
-} else {
-  message("A matching combined cache exists; no download is needed.")
 }
-```
 
-## Import Tokens
+if (length(english_failed) > 0L) {
+  stop(
+    "These corpora failed: ", paste(english_failed, collapse = "; "),
+    ". Completed batches remain saved. ",
+    "Keep english_force_download <- FALSE and rerun this chunk."
+  )
+}
 
-Loads a matching combined cache or assembles the saved corpus batches with a unified Arrow schema. Checks row counts and saves the combined Feather cache; writes a raw CSV only when the optional setting is enabled.
+# Corpora that returned no tokens have no file, so only saved files are used.
+english_valid_files <- english_batch_files[file.exists(english_batch_files)]
 
-```{r import_tokens}
-english_loaded_from_cache <- english_complete_cache_available
+stopifnot(length(english_valid_files) > 0L)
 
-if (english_complete_feather_available) {
-  message("Loading the matching combined Feather cache...")
-  english_all_tokens <- arrow::read_feather(english_feather_path)
-} else if (english_complete_csv_available) {
-  message("Loading the matching combined CSV cache...")
-  english_all_tokens <- readr::read_csv(english_csv_path, show_col_types = FALSE)
-} else {
-  if (!exists("english_download_status") ||
-      !all(english_download_status$status %in% c("cached", "downloaded"))) {
-    stop("Finish download_corpora successfully before assembling.")
-  }
-  message("Combining saved corpus files; this step uses RAM and disk, not a new download...")
-  # Read each file's column definitions.
-  english_batch_schemas <- lapply(english_batch_files, function(path) {
-    original_schema <- arrow::open_dataset(
-      path,
-      format = "ipc"
-    )$schema
+# Read each file's column definitions without loading its token rows.
+# Standardize integer columns to int64 to avoid int32/int64 conflicts.
+english_schemas <- lapply(english_valid_files, function(path) {
+  current_schema <- arrow::open_dataset(
+    path,
+    format = "ipc"
+  )$schema
 
-    # Widen 32-bit integers to 64-bit integers.
-    # This also handles the same mismatch in other integer columns.
-    fields <- lapply(original_schema$fields, function(f) {
-      if (f$type$Equals(arrow::int32())) {
-        arrow::field(
-          f$name,
-          arrow::int64(),
-          metadata = f$metadata,
-          nullable = f$nullable
-        )
-      } else {
-        f
-      }
-    })
-
-    arrow::schema(fields)
+  fields <- lapply(current_schema$fields, function(f) {
+    if (f$type$ToString() %in% c("int8", "int16", "int32", "int64")) {
+      arrow::field(f$name, arrow::int64())
+    } else {
+      f
+    }
   })
 
-  # Combine the now-compatible column definitions.
-  english_common_schema <- arrow::unify_schemas(
-    schemas = english_batch_schemas
-  )
+  arrow::schema(fields)
+})
 
-  # Read all saved files using the shared schema.
-  english_all_tokens <- arrow::open_dataset(
-    english_batch_files,
-    format = "ipc",
-    schema = english_common_schema,
-    unify_schemas = FALSE
-  ) %>% dplyr::collect()
-}
-
-english_validate_tokens(english_all_tokens)
-english_expected_rows <- if (english_loaded_from_cache) {
-  english_cache_info$row_count
-} else {
-  sum(english_download_status$n_tokens)
-}
-if (nrow(english_all_tokens) != english_expected_rows) {
-  stop("Combined token count does not match the saved source records.")
-}
-
-if (!english_loaded_from_cache || !english_complete_feather_available) {
-  message("Saving the complete Feather cache and its source record...")
-  english_save_token_cache(
-    english_all_tokens, english_feather_path, english_source_info_path, english_query_info
-  )
-}
-if (english_write_combined_csv) {
-  message("Writing the optional combined raw CSV...")
-  readr::write_csv(english_all_tokens, english_csv_path)
-}
-
-tibble(
-  db_version = english_db_version,
-  loaded_from_cache = english_loaded_from_cache,
-  n_tokens = nrow(english_all_tokens),
-  n_children = english_all_tokens$target_child_id %>% unique() %>% length()
+# Combine the standardized column definitions.
+english_common_schema <- arrow::unify_schemas(
+  schemas = english_schemas
 )
+
+# Read the cached files using those consistent types.
+english_all_tokens <- arrow::open_dataset(
+  english_valid_files,
+  format = "ipc",
+  schema = english_common_schema,
+  unify_schemas = FALSE
+) %>%
+  dplyr::collect()
 ```
 
 # Token Processing
 
-Screens target-child ages, records exclusion counts, and adds speaker, completed-month age, and utterance-type labels. Builds neighboring-token context for later matching.
+Filters `english_tokens` by `target_child_age` and assigns speaker, age, and utterance-type fields before negation coding.
 
-## Exclusions
+## Filter Ages and Count Exclusions
 
-Keeps finite target-child ages from birth to under 72 months. Counts tokens and unique child IDs, including a missing ID as one distinct value, and retains observed tokens at ages 0–10.
+Filters `english_all_tokens` to finite `target_child_age` values from 0 to under 72 months and records row and child counts in `english_exclusions`. Lowercases `gloss` while preserving its source spelling in `gloss_original`.
 
 ```{r exclusions}
 english_n_tokens_before_exclusions <- nrow(english_all_tokens)
@@ -374,6 +212,10 @@ english_tokens <- english_all_tokens %>%
     gloss_original = as.character(gloss),
     gloss = str_to_lower(as.character(gloss), locale = "en")
   )
+
+rm(english_all_tokens)
+invisible(gc())
+
 
 english_tokens <- english_tokens %>%
   filter(is.finite(target_child_age))
@@ -403,7 +245,7 @@ english_exclusions
 
 ## Save Exclusion Records
 
-Saves the exclusion summary and retained token rows as CSV files in the raw-data directory.
+Saves `english_exclusions` and the age-filtered `english_tokens` as CSV files in `english_raw_dir`.
 
 ```{r save_exclusions}
 readr::write_csv(
@@ -416,39 +258,31 @@ readr::write_csv(
 )
 ```
 
-## Speaker Roles
+## Assign Speaker Roles
 
-Maps target-child roles to `child` and mother or father roles to `parent` after case normalization. Stops if a role is missing or unexpected.
+Maps target-child roles to `child` and every other role, including missing values, to `parent` in `english_tokens$speaker`.
 
 ```{r speaker_roles}
 english_tokens <- english_tokens %>%
   mutate(
     speaker = case_when(
       str_to_lower(as.character(speaker_role), locale = "en") == "target_child" ~ "child",
-      str_to_lower(as.character(speaker_role), locale = "en") %in%
-        c("mother", "father") ~ "parent",
-      TRUE ~ NA_character_
+      TRUE ~ "parent"
     )
   )
-
-if (anyNA(english_tokens$speaker)) {
-  english_invalid_speaker_roles <- unique(as.character(english_tokens$speaker_role[is.na(english_tokens$speaker)]))
-  english_invalid_speaker_roles[is.na(english_invalid_speaker_roles)] <- "<missing>"
-  stop("Unexpected or missing speaker roles: ", paste(english_invalid_speaker_roles, collapse = ", "))
-}
 ```
 
-## Age
+## Calculate Age in Months
 
-Calculates completed-month age by flooring the screened target-child age.
+Calculates `english_tokens$age` as the floor of `target_child_age` in months.
 
 ```{r age}
 english_tokens$age <- floor(english_tokens$target_child_age)
 ```
 
-## Utterance Types
+## Recode Utterance Types
 
-Recodes specified question, imperative, and disrupted utterance labels; leaves unlisted labels unchanged.
+Recodes question, imperative, and disrupted labels from `utterance_type` into `english_tokens$utterance_type`, leaving unlisted values unchanged.
 
 ```{r utterance_types}
 english_tokens$utterance_type <- recode(
@@ -466,88 +300,75 @@ english_tokens$utterance_type <- recode(
   `self interruption` = "other",
   `self interruption question` = "interrogative",
   `trail off` = "other",
-  `trail off question` = "other"
+  `trail off question` = "interrogative"
 )
-```
-
-## Context
-
-Records neighboring glosses and part-of-speech tags within each utterance and initializes `word` to `nonfunction`.
-
-```{r context}
-english_tokens <- english_tokens %>%
-  arrange(transcript_id, utterance_id, token_order) %>%
-  group_by(transcript_id, utterance_id) %>%
-  mutate(
-    prev2_gloss = lag(gloss, 2),
-    prev_gloss  = lag(gloss),
-    next_gloss  = lead(gloss),
-    next2_gloss = lead(gloss, 2),
-    prev2_pos   = lag(part_of_speech, 2),
-    prev_pos    = lag(part_of_speech),
-    next_pos    = lead(part_of_speech),
-    next2_pos   = lead(part_of_speech, 2)
-  ) %>%
-  ungroup()
-
-english_tokens$word <- "nonfunction"
 ```
 
 # Define Target Words
 
-Marks `no`, `not`, and `n't` as candidate negation words and assigns function-word labels.
+Labels candidate English negators in `english_tokens$word` and assigns their word and syntactic categories.
 
-## Mark Target Words
+## Assign Target Word Labels
 
-Marks exact gloss matches for `no`, `not`, and `n't`.
+Normalizes apostrophe variants and assigns `no`, `nope`, `nah`, `not`, and `n't` to `english_tokens$word` when matched.
 
 ```{r function_words}
-english_function_words <- c("no", "not", "n't")
+english_tokens$word <- "nonfunction"
+english_no_forms <- c("no", "nope", "nah")
+english_function_words <- c(english_no_forms, "not", "n't")
+english_normalize_negation_form <- function(x) {
+  stringr::str_replace_all(
+    stringr::str_to_lower(as.character(x), locale = "en"), "[‘’ʼ＇]", "'"
+  )
+}
+english_negation_match <- english_normalize_negation_form(english_tokens$gloss)
 
 for (x in english_function_words) {
-  english_tokens$word[english_tokens$gloss == x] <- x
+  english_tokens$word[!is.na(english_negation_match) & english_negation_match == x] <- x
 }
 ```
 
-## Word Categories
+## Assign Word Categories
 
-Labels matched negators `Negation` and other tokens `nonfunction`.
+Assigns `Negation` to matched targets and `nonfunction` to other rows in `english_tokens$word_category`.
 
 ```{r wordcategories}
 english_tokens$word_category <- "nonfunction"
-english_tokens$word_category[english_tokens$word %in% c("no", "not", "n't")] <- "Negation"
+english_tokens$word_category[english_tokens$word %in% english_function_words] <- "Negation"
 ```
 
-## Syntactic Category
+## Assign Syntactic Categories
 
-Labels identified function words `Function` and other tokens `nonfunction`.
+Assigns `Function` to negation targets and `nonfunction` to other rows in `english_tokens$syncategory`.
 
 ```{r syncategory}
 english_tokens$syncategory <- "Function"
 english_tokens$syncategory[english_tokens$word_category == "nonfunction"] <- "nonfunction"
 ```
 
-# Negation Word Normalization
+# Classify Negation
 
-Normalizes `n't` to `not` in `word` and records `no` or `not` in `negation_category`.
+Normalizes `no` and `not` categories, assigns their scope, and excludes fixed expressions in `english_tokens`.
+
+## Normalize Negation Categories
+
+Pools `no`, `nope`, and `nah` as `no` and pools `not` and `n't` as `not` in `english_tokens$negation_category`.
 
 ```{r negation_clean}
 english_tokens <- english_tokens %>%
   mutate(
     negation_category = case_when(
-      gloss == "no" ~ "no",
-      gloss %in% c("not", "n't") ~ "not",
+      english_negation_match %in% english_no_forms ~ "no",
+      english_negation_match %in% c("not", "n't") ~ "not",
       TRUE ~ NA_character_
     )
-  ) %>%
-  mutate(
-    word = if_else(gloss %in% "n't", "not", word)
   )
+rm(english_negation_match)
 ```
 
-# Sentential vs. Discourse Negation
+## Assign Negation Scope
 
-Labels `no` as `discourse` and `not` (including normalized `n't`) as `sentential` regardless of position.
+Assigns `discourse` to the `no` category and `sentential` to the `not` category in `english_tokens$negation_scope`.
 
 ```{r negation_categorization}
 english_tokens <- english_tokens %>%
@@ -562,10 +383,128 @@ english_tokens <- english_tokens %>%
   )
 ```
 
+## Reclassify Determiner no
+
+Reclassifies `no` with determiner or quantifier `part_of_speech` tags as `sentential` and records `no_is_determiner`.
+
+```{r determiner_no}
+english_tokens <- english_tokens %>%
+  mutate(
+    no_is_determiner = word == "no" &
+      str_detect(
+        str_to_lower(str_trim(
+          coalesce(as.character(part_of_speech), "")
+        )),
+        "^(det|qn)(:|$)"
+      ),
+    negation_scope = if_else(no_is_determiner, "sentential", negation_scope)
+  )
+```
+
+## Exclude Fixed Expressions
+
+Excludes `no` in `oh no`, `no problem`, `no worries`, and `no more` by clearing its negation labels and recording `negation_exclusion`.
+
+```{r exclude_fixed_expressions}
+english_tokens <- english_tokens %>%
+  arrange(transcript_id, utterance_id, token_order) %>%
+  mutate(
+    # Neighbouring words, only when they are in the same utterance
+    .same_prev = coalesce(lag(utterance_id) == utterance_id, FALSE),
+    .same_next = coalesce(lead(utterance_id) == utterance_id, FALSE),
+    .prev1 = if_else(.same_prev, lag(gloss), ""),
+    .next1 = if_else(.same_next, lead(gloss), ""),
+    negation_exclusion = case_when(
+      word == "no" & .prev1 == "oh" ~ "oh no",
+      word == "no" & .next1 == "problem" ~ "no problem",
+      word == "no" & .next1 == "worries" ~ "no worries",
+      word == "no" & .next1 == "more" ~ "no more",
+      TRUE ~ NA_character_
+    ),
+    excluded = !is.na(negation_exclusion),
+    word = if_else(excluded, "nonfunction", word),
+    word_category = if_else(excluded, "nonfunction", word_category),
+    syncategory = if_else(excluded, "nonfunction", syncategory),
+    negation_category = if_else(excluded, NA_character_, negation_category),
+    negation_scope = if_else(excluded, NA_character_, negation_scope)
+  ) %>%
+  select(-excluded, -starts_with("."))
+
+count(english_tokens, negation_exclusion, speaker)
+```
+
+# Expand Negative Forms
+
+Expands words ending in `n't` and `cannot` into auxiliary and negative components in `english_tokens_negation_expanded`. Retains source identifiers and labels only the negative components as `Negation`.
+
+```{r expand_negative_forms}
+# Stems that are not simply the word minus n't
+english_irregular_stems <- c(wo = "will", ca = "can", sha = "shall", ai = "be")
+
+english_expand_negative_forms <- function(tokens) {
+  match_form <- english_normalize_negation_form(tokens$gloss)
+
+  # Any word ending in n't: the stem is everything before n't
+  auxiliary_stem <- stringr::str_match(match_form, "^(.+)n't$")[, 2]
+  irregular <- !is.na(auxiliary_stem) & auxiliary_stem %in% names(english_irregular_stems)
+  auxiliary_stem[irregular] <- english_irregular_stems[auxiliary_stem[irregular]]
+  auxiliary_stem[!is.na(match_form) & match_form == "cannot"] <- "can"
+  split_token <- !is.na(auxiliary_stem)
+  negative_form <- ifelse(match_form %in% "cannot", "not", "n't")
+
+  source_row <- rep.int(seq_len(nrow(tokens)), 1L + as.integer(split_token))
+  subtoken_order <- sequence(1L + as.integer(split_token)) - 1L
+  expanded <- tokens[source_row, , drop = FALSE]
+  expanded$negation_subtoken_order <- subtoken_order
+
+  stem_row <- subtoken_order == 0L & split_token[source_row]
+  negative_row <- subtoken_order == 1L
+  expanded$gloss[stem_row] <- auxiliary_stem[source_row[stem_row]]
+  expanded$gloss[negative_row] <- negative_form[source_row[negative_row]]
+
+  # The auxiliary contributes to the denominator but not the negation numerator.
+  expanded$word[stem_row] <- "nonfunction"
+  expanded$word_category[stem_row] <- "nonfunction"
+  expanded$syncategory[stem_row] <- "nonfunction"
+  expanded$negation_category[stem_row] <- NA_character_
+  expanded$negation_scope[stem_row] <- NA_character_
+
+  # The negative component is the sole new negation occurrence.
+  expanded$word[negative_row] <- expanded$gloss[negative_row]
+  expanded$word_category[negative_row] <- "Negation"
+  expanded$syncategory[negative_row] <- "Function"
+  expanded$negation_category[negative_row] <- "not"
+  expanded$negation_scope[negative_row] <- "sentential"
+
+  # Keep standalone apostrophe variants of n't as one token with the n't form label.
+  standalone_negative <- subtoken_order == 0L & !split_token[source_row] &
+    !is.na(match_form[source_row]) & match_form[source_row] == "n't"
+  expanded$word[standalone_negative] <- "n't"
+  expanded$word_category[standalone_negative] <- "Negation"
+  expanded$syncategory[standalone_negative] <- "Function"
+  expanded$negation_category[standalone_negative] <- "not"
+  expanded$negation_scope[standalone_negative] <- "sentential"
+
+  if (nrow(expanded) != nrow(tokens) + sum(split_token) ||
+      any(!nzchar(expanded$gloss[stem_row])) ||
+      any(!nzchar(expanded$gloss[negative_row])) ||
+      any(expanded$word_category[stem_row] == "Negation") ||
+      any(expanded$word_category[negative_row] != "Negation")) {
+    stop("Negative-form expansion failed its row or component checks.")
+  }
+  expanded
+}
+
+english_tokens_negation_expanded <- english_expand_negative_forms(english_tokens)
+```
+
 # Save Processed Data
 
-Saves the annotated token table to `english_data/processed_data/english_tokens_processed.feather`.
+Saves `english_tokens_negation_expanded` to `english_data/processed_data/english_tokens_processed.feather` for downstream counts and plots.
 
 ```{r save_processed_data}
-write_feather(english_tokens, file.path(english_processed_dir, "english_tokens_processed.feather"))
+write_feather(
+  english_tokens_negation_expanded,
+  file.path(english_processed_dir, "english_tokens_processed.feather")
+)
 ```

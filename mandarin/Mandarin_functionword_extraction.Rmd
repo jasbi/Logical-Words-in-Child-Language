@@ -6,13 +6,13 @@ output:
   pdf_document
 ---
 
-# How to Use This File
+# Overview
 
-Runs the Mandarin extraction from CHILDES token import through negation coding to the processed Feather export. Set the working directory to `mandarin`, install `childesr`, `tidyverse`, and `arrow`, then run chunks in order. Matching raw caches are reused unless `mandarin_force_download` is `TRUE`; the final file is `mandarin_data/processed_data/mandarin_tokens_processed.feather`.
+Runs the Mandarin extraction from CHILDES utterances through token-level negation coding to `mandarin_data/processed_data/mandarin_tokens_processed.feather`. Uses `mandarin` as the working directory with `childesr`, `tidyverse`, and `arrow`, and reuses corpus caches unless `mandarin_force_download` is `TRUE`.
 
 # Setup
 
-Loads the packages, sets knitr options, and creates relative raw and processed data directories.
+Loads `childesr`, `tidyverse`, and `arrow`, configures knitr, and creates `mandarin_raw_dir` and `mandarin_processed_dir`.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -40,7 +40,11 @@ dir.create(mandarin_processed_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Load Data
 
-Loads the selected Mandarin corpora from CHILDES release 2026.1 or matching local caches. Validates the imported columns and cache source record before token processing.
+Selects CHILDES source corpora and imports utterances into `mandarin_all_utterances` for annotation.
+
+## Select Corpora
+
+Selects 20 Mandarin corpora in `mandarin_corpora_names` for CHILDES release `mandarin_db_version`.
 
 ```{r collections}
 # This chunk specifies the 20 Mandarin corpora included in the data request.
@@ -68,126 +72,149 @@ mandarin_corpora_names <- c(
 )
 ```
 
-## Import Tokens
+## Import Data
 
-Loads a matching raw cache or requests tokens for the selected corpus or collection. Validates columns and row counts, then saves new raw data with its query source record.
+Downloads or reuses corpus-level Mandarin utterances in `mandarin_all_utterances` and checks the combined batch row count.
 
-```{r import_tokens}
-# Only use caches belonging to the pinned release and the same query.
-mandarin_feather_path <- file.path(mandarin_raw_dir, "all_mandarin_tokens.feather")
-mandarin_csv_path <- file.path(mandarin_raw_dir, "all_mandarin_tokens.csv")
-mandarin_source_info_path <- file.path(mandarin_raw_dir, "all_mandarin_tokens_source.rds")
+```{r import_utterances}
+# Assumes mandarin_raw_dir, mandarin_db_version,
+# mandarin_corpora_names, and mandarin_force_download are defined.
 
-mandarin_query_roles <- c("Target_Child", "Mother", "Father")
-mandarin_query_info <- list(
-  db_version = mandarin_db_version,
-  corpus = sort(mandarin_corpora_names),
-  role = sort(mandarin_query_roles),
-  token = "%",
-  replace = TRUE
+# One folder for this DB version, one Feather file per corpus.
+mandarin_batch_dir <- file.path(
+  mandarin_raw_dir,
+  paste0("corpus_batches_", mandarin_db_version, "_all_speakers")
 )
 
-mandarin_cache_info <- if (file.exists(mandarin_source_info_path)) {
-  tryCatch(readRDS(mandarin_source_info_path), error = function(e) NULL)
-} else {
-  NULL
-}
+dir.create(mandarin_batch_dir, recursive = TRUE, showWarnings = FALSE)
 
-mandarin_cache_matches <- is.list(mandarin_cache_info) &&
-  identical(mandarin_cache_info$query, mandarin_query_info)
-mandarin_loaded_from_cache <- FALSE
+mandarin_batch_files <- file.path(
+  mandarin_batch_dir,
+  paste0(mandarin_corpora_names, ".feather")
+)
 
-if (!mandarin_force_download && mandarin_cache_matches && file.exists(mandarin_feather_path)) {
-  cat(sprintf("Loading verified childes-db %s Feather cache...\n", mandarin_db_version))
-  mandarin_all_tokens <- arrow::read_feather(mandarin_feather_path)
-  mandarin_loaded_from_cache <- TRUE
-
-} else if (!mandarin_force_download && mandarin_cache_matches && file.exists(mandarin_csv_path)) {
-  cat(sprintf("Loading verified childes-db %s CSV cache...\n", mandarin_db_version))
-  mandarin_all_tokens <- readr::read_csv(mandarin_csv_path, show_col_types = FALSE)
-  mandarin_loaded_from_cache <- TRUE
-
-} else {
-  cat(sprintf("Downloading tokens from childes-db %s...\n", mandarin_db_version))
-
-  mandarin_all_tokens <- childesr::get_tokens(
-    corpus = mandarin_corpora_names,
-    role = mandarin_query_roles,
-    token = "%",
-    replace = TRUE,
-    db_version = mandarin_db_version
-  )
-}
-
-# Avoid saving an empty/failed download or processing incompatible columns.
-if (is.null(mandarin_all_tokens) || nrow(mandarin_all_tokens) == 0L) {
-  stop("No tokens returned. Check the query messages and corpus names; no cache was saved.")
-}
-
+# Columns every corpus file must have.
 mandarin_required_columns <- c(
-  "target_child_id", "target_child_age", "transcript_id", "utterance_id",
-  "token_order", "gloss", "part_of_speech", "speaker_role",
-  "speaker_code", "utterance_type"
+  "id", "transcript_id", "target_child_id", "target_child_age",
+  "gloss", "speaker_role", "speaker_code", "type", "utterance_order",
+  "part_of_speech"
 )
-mandarin_missing_columns <- setdiff(mandarin_required_columns, names(mandarin_all_tokens))
-if (length(mandarin_missing_columns) > 0L) {
-  stop("Required columns missing: ", paste(mandarin_missing_columns, collapse = ", "))
+
+# A saved batch is usable if the file exists and has the required columns.
+mandarin_batch_is_valid <- function(path) {
+  if (!file.exists(path)) return(FALSE)
+  saved_columns <- names(arrow::open_dataset(path, format = "ipc"))
+  all(mandarin_required_columns %in% saved_columns)
 }
 
-if (mandarin_loaded_from_cache && nrow(mandarin_all_tokens) != mandarin_cache_info$row_count) {
-  stop("Cache row count does not match its source record. Set mandarin_force_download <- TRUE and rerun.")
+# Write to a temporary file first, then rename it.
+# If R stops mid-write, no half-written batch is left behind.
+mandarin_save_batch <- function(data, path) {
+  temp_path <- paste0(path, ".tmp")
+  arrow::write_feather(data, temp_path)
+  if (!file.rename(temp_path, path)) stop("Could not save: ", path)
 }
 
-if (!mandarin_loaded_from_cache) {
-  cat("Saving the new data and its release/query information...\n")
-  arrow::write_feather(mandarin_all_tokens, mandarin_feather_path)
-  readr::write_csv(mandarin_all_tokens, mandarin_csv_path)
-  saveRDS(
-    list(
-      query = mandarin_query_info,
-      downloaded_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
-      childesr_version = as.character(utils::packageVersion("childesr")),
-      row_count = nrow(mandarin_all_tokens)
-    ),
-    mandarin_source_info_path
+mandarin_download_status <- tibble::tibble(
+  corpus_name = mandarin_corpora_names,
+  status = "pending",
+  n_utterances = NA_real_,
+  error = NA_character_
+)
+
+for (i in seq_along(mandarin_corpora_names)) {
+  corpus_name <- mandarin_corpora_names[[i]]
+  path <- mandarin_batch_files[[i]]
+  message(sprintf("[%d/%d] %s", i, length(mandarin_corpora_names), corpus_name))
+
+  if (!mandarin_force_download && mandarin_batch_is_valid(path)) {
+    # Already saved: reuse it and just count its rows.
+    mandarin_download_status$status[[i]] <- "cached"
+    mandarin_download_status$n_utterances[[i]] <-
+      nrow(arrow::read_feather(path, col_select = "id"))
+
+  } else {
+    # Not saved yet: download all speakers (no role argument).
+    # tryCatch turns an error into a message so the loop moves on.
+    utts <- tryCatch(
+      childesr::get_utterances(
+        corpus = corpus_name,
+        db_version = mandarin_db_version
+      ),
+      error = function(e) conditionMessage(e)
+    )
+
+    if (is.character(utts)) {
+      # Download failed: utts holds the error message.
+      mandarin_download_status$status[[i]] <- "failed"
+      mandarin_download_status$error[[i]] <- utts
+      message("  FAILED: ", utts)
+    } else {
+      mandarin_save_batch(utts, path)
+      mandarin_download_status$status[[i]] <- "downloaded"
+      mandarin_download_status$n_utterances[[i]] <- nrow(utts)
+      message("  Saved ", nrow(utts), " utterances.")
+    }
+  }
+}
+
+if (any(mandarin_download_status$status == "failed")) {
+  stop(
+    "Some corpora failed. Completed batches remain saved. ",
+    "Keep mandarin_force_download <- FALSE and rerun this chunk."
   )
-} else if (!file.exists(mandarin_feather_path)) {
-  arrow::write_feather(mandarin_all_tokens, mandarin_feather_path)
 }
+
+mandarin_all_utterances <- mandarin_batch_files %>%
+  purrr::map(arrow::read_feather) %>%
+  purrr::keep(function(d) nrow(d) > 0) %>%
+  dplyr::bind_rows()
+
+# The combined data should have exactly as many rows as the batches.
+stopifnot(
+  nrow(mandarin_all_utterances) ==
+    sum(mandarin_download_status$n_utterances)
+)
+
+mandarin_download_status %>%
+  dplyr::select(corpus_name, status, n_utterances)
 ```
 
 # Token Processing
 
-Screens target-child ages, records exclusion counts, and adds speaker, completed-month age, and utterance-type labels. Builds neighboring-token context for later matching.
+Filters `mandarin_utterances` by `target_child_age` and assigns speaker, age, and utterance-type fields before negation coding.
 
-## Exclusions
+## Filter Ages and Count Exclusions
 
-Keeps finite target-child ages from birth to under 72 months. Counts tokens and unique child IDs, including a missing ID as one distinct value, and retains observed tokens at ages 0–10.
+Filters `mandarin_all_utterances` to finite `target_child_age` values from 0 to under 72 months and records row and child counts in `mandarin_exclusions`.
 
 ```{r exclusions}
-mandarin_n_tokens_before_exclusions <- nrow(mandarin_all_tokens)
-mandarin_n_chi_before_exclusions <- mandarin_all_tokens$target_child_id %>% unique() %>% length()
+mandarin_n_utterances_before_exclusions <- nrow(mandarin_all_utterances)
+mandarin_n_chi_before_exclusions <- mandarin_all_utterances$target_child_id %>%
+  unique() %>% length()
 
-mandarin_tokens <- mandarin_all_tokens
-
-mandarin_tokens <- mandarin_tokens %>%
+mandarin_utterances <- mandarin_all_utterances %>%
   filter(is.finite(target_child_age))
-mandarin_n_tokens_after_finite_age <- nrow(mandarin_tokens)
-mandarin_n_chi_after_finite_age <- mandarin_tokens$target_child_id %>% unique() %>% length()
 
-mandarin_tokens <- mandarin_tokens %>%
+mandarin_n_utterances_after_finite_age <- nrow(mandarin_utterances)
+mandarin_n_chi_after_finite_age <- mandarin_utterances$target_child_id %>%
+  unique() %>% length()
+
+mandarin_utterances <- mandarin_utterances %>%
   filter(target_child_age >= 0, target_child_age < 72)
-mandarin_n_tokens_after_age_range <- nrow(mandarin_tokens)
-mandarin_n_chi_after_age_range <- mandarin_tokens$target_child_id %>% unique() %>% length()
+
+mandarin_n_utterances_after_age_range <- nrow(mandarin_utterances)
+mandarin_n_chi_after_age_range <- mandarin_utterances$target_child_id %>%
+  unique() %>% length()
 
 mandarin_exclusions <- tibble(
-  n_tokens_before_exclusions = mandarin_n_tokens_before_exclusions,
-  n_after_finite_age = mandarin_n_tokens_after_finite_age,
-  n_after_age_range = mandarin_n_tokens_after_age_range,
+  n_utterances_before_exclusions = mandarin_n_utterances_before_exclusions,
+  n_after_finite_age = mandarin_n_utterances_after_finite_age,
+  n_after_age_range = mandarin_n_utterances_after_age_range,
   missing_or_nonfinite_age =
-    mandarin_n_tokens_before_exclusions - mandarin_n_tokens_after_finite_age,
+    mandarin_n_utterances_before_exclusions - mandarin_n_utterances_after_finite_age,
   outside_age_range =
-    mandarin_n_tokens_after_finite_age - mandarin_n_tokens_after_age_range,
+    mandarin_n_utterances_after_finite_age - mandarin_n_utterances_after_age_range,
   n_chi_total = mandarin_n_chi_before_exclusions,
   n_chi_after_finite_age = mandarin_n_chi_after_finite_age,
   n_chi_after_age_range = mandarin_n_chi_after_age_range
@@ -198,7 +225,7 @@ mandarin_exclusions
 
 ## Save Exclusion Records
 
-Saves the exclusion summary and retained token rows as CSV files in the raw-data directory.
+Saves `mandarin_exclusions` and the age-filtered `mandarin_utterances` as CSV files in `mandarin_raw_dir`.
 
 ```{r save_exclusions}
 readr::write_csv(
@@ -206,418 +233,397 @@ readr::write_csv(
   file.path(mandarin_raw_dir, "exclusions_mandarin_summary.csv")
 )
 readr::write_csv(
-  mandarin_tokens,
-  file.path(mandarin_raw_dir, "mandarin_tokens_excluded.csv")
+  mandarin_utterances,
+  file.path(mandarin_raw_dir, "mandarin_utterances_excluded.csv")
 )
 ```
 
-## Speaker Roles
+## Assign Speaker Roles
 
-Maps target-child roles to `child` and mother or father roles to `parent` after case normalization. Stops if a role is missing or unexpected.
+Maps target-child roles to `child` and every other role, including missing values, to `parent` in `mandarin_utterances$speaker`.
 
 ```{r speaker_roles}
-mandarin_tokens <- mandarin_tokens %>%
+mandarin_utterances <- mandarin_utterances %>%
   mutate(
     speaker = case_when(
       str_to_lower(as.character(speaker_role), locale = "en") == "target_child" ~ "child",
-      str_to_lower(as.character(speaker_role), locale = "en") %in%
-        c("mother", "father") ~ "parent",
-      TRUE ~ NA_character_
+      TRUE ~ "parent"
     )
   )
-
-if (anyNA(mandarin_tokens$speaker)) {
-  mandarin_invalid_speaker_roles <- unique(as.character(mandarin_tokens$speaker_role[is.na(mandarin_tokens$speaker)]))
-  mandarin_invalid_speaker_roles[is.na(mandarin_invalid_speaker_roles)] <- "<missing>"
-  stop("Unexpected or missing speaker roles: ", paste(mandarin_invalid_speaker_roles, collapse = ", "))
-}
 ```
 
-## Age
+## Calculate Age in Months
 
-Calculates completed-month age by flooring the screened target-child age.
+Calculates `mandarin_utterances$age` as the floor of `target_child_age` in months.
 
 ```{r age}
-mandarin_tokens$age <- mandarin_tokens$target_child_age %>% floor()
+mandarin_utterances$age <- mandarin_utterances$target_child_age %>% floor()
 ```
 
-## Utterance Types
+## Recode Utterance Types
 
-Recodes specified question, imperative, and disrupted utterance labels; leaves unlisted labels unchanged.
+Recodes question, imperative, and disrupted labels from `type` into `mandarin_utterances$utterance_type`, leaving unlisted values unchanged.
 
 ```{r utterance_types}
 # Prepare the utterance_type categories for this study based on the utterance_types in childes-db
 ## Categories: declarative, imperative, interrogative, and other
-mandarin_tokens$utterance_type <-
-  recode(mandarin_tokens$utterance_type, 
-         question = "interrogative",
-         `broken for coding` = "other",
-         `imperative_emphatic` = "imperative",
-         interruption = "other",
-         `interruption question` = "interrogative",
-         `missing CA terminator` = "other",
-         `no break TCU continuation` = "other",
-         `question exclamation` = "interrogative",
-         `quotation next line` = "other",
-         `quotation precedes` = "other",
-         `self interruption` = "other",
-         `self interruption question` = "interrogative",
-         `trail off` = "other",
-         `trail off question` = "interrogative"
+mandarin_utterances$utterance_type <-
+  dplyr::recode(
+    as.character(mandarin_utterances$type),
+    question = "interrogative",
+    `broken for coding` = "other",
+    imperative_emphatic = "imperative",
+    interruption = "other",
+    `interruption question` = "interrogative",
+    `missing CA terminator` = "other",
+    `no break TCU continuation` = "other",
+    `question exclamation` = "interrogative",
+    `quotation next line` = "other",
+    `quotation precedes` = "other",
+    `self interruption` = "other",
+    `self interruption question` = "interrogative",
+    `trail off` = "other",
+    `trail off question` = "interrogative"
   )
-```
-
-## Context
-
-Records neighboring glosses and part-of-speech tags within each utterance and initializes `word` to `nonfunction`.
-
-```{r context}
-# Keep neighboring-word context within the same transcript and utterance.
-mandarin_tokens <- mandarin_tokens %>%
-  arrange(transcript_id, utterance_id, token_order) %>%
-  group_by(transcript_id, utterance_id) %>%
-  mutate(
-    prev2_gloss = lag(gloss, 2),
-    prev_gloss = lag(gloss),
-    next_gloss = lead(gloss),
-    next2_gloss = lead(gloss, 2),
-    prev2_pos = lag(part_of_speech, 2),
-    prev_pos = lag(part_of_speech),
-    next_pos = lead(part_of_speech),
-    next2_pos = lead(part_of_speech, 2)
-  ) %>%
-  ungroup()
-
-mandarin_tokens$word <- "nonfunction"
 ```
 
 # Define Target Words
 
-Marks candidate negation, conjunction, disjunction, and conditional words using gloss, utterance type, and selected neighboring POS tags.
+Defines Mandarin candidate negators and non-negating expression lists, then flags negation in `mandarin_utterances`.
 
-## Mark Target Words
+## List Candidate Negators
 
-Marks the listed glosses by exact match, `还是` only in interrogatives, and `跟` only when both neighboring POS tags begin with `n` or `pro`.
+Lists `不` and `没` in `mandarin_function_words` as candidate negators.
 
 ```{r function_words}
-
 mandarin_function_words <- c(
   # Negation (no/not)
-  "不", "不是","没", "没有",
-  # Conjunction (and)
-  "和", "而且",
-  # Disjunction (or)
-   "或者",
-  # Conditionals (if)
-  "如果", "要是", "的话"
+  "不","没"
+)
+```
+
+
+## Define Excluded Expressions
+
+Defines `bu_exclusion` and `mei_exclusion` as expressions whose negator characters should be ignored.
+
+```{r mandarin_exclusionword}
+# Special combinations that are not considered negation
+bu_exclusion <- c(
+  # Connectives: exclude these connective readings.
+  "不过",     # however / merely
+  "不過",     # however / merely (traditional)
+  "不然",     # otherwise
+  "要不然",   # otherwise
+  "要不",     # otherwise / how about
+
+  # Approximation or possibility.
+  "差不多",   # approximately / almost
+  "说不定",   # perhaps
+  "說不定",   # perhaps (traditional)
+  "搞不好",   # perhaps
+
+  # Conventional social formulas.
+  "对不起",   # sorry
+  "對不起",   # sorry (traditional)
+  "不客气",   # you're welcome
+  "不客氣",   # you're welcome
+  "不好意思", # excuse me / sorry
+
+  # Intensification or conventional affirmation.
+  "不得了",   # extremely / extraordinary
+  "不错",     # good / correct
+  "不錯",     # good / correct
+  "可不"      # exactly / indeed
 )
 
-for (x in mandarin_function_words) {
-  mandarin_tokens$word[mandarin_tokens$gloss == x] <- x
+mei_exclusion <- c(
+  "没关系", # that's all right / no relationship
+  "沒關係", # that's all right / no relationship (traditional)
+  "没错", # that’s right
+  "沒錯", # that’s right 
+  "没事",   # no problem / nothing happening
+  "沒事",   # no problem (traditional)
+  "没了",   # all gone / used up
+  "沒了",   # all gone / used up (traditional)
+  "熊出没" # name of Chinese cartoon
+)
+```
+
+## Detect Negation
+
+Builds `mandarin_exclusion_pattern` and `mandarin_a_not_a_pattern` to remove excluded phrases while retaining A-not-A questions. Flags remaining negators in `mandarin_utterances$negation`.
+
+```{r mandarin_exclusion_pipeline}
+# Negator characters: 不, simplified 没, traditional 沒
+mandarin_negators <- "[不没沒]"
+
+# Turn a phrase into a pattern that allows spaces between its characters:
+# "对不起" -> "对 ?不 ?起", which matches 对不起, 对 不 起, 对不 起
+phrase_pattern <- function(phrase) {
+  paste(str_split_1(phrase, ""), collapse = " ?")
 }
 
-# Only mark haishi(还是) when it occurs in an interrogative utterance (the "or" sense).
-# In declarative/imperative utterances, 还是 means "still/preferably."
-mandarin_tokens$word[
-  mandarin_tokens$gloss == "还是" &
-  mandarin_tokens$utterance_type == "interrogative"
-] <- "还是"
+# Put longer phrases first so 要不然 is tried before 要不.
+mandarin_exclusion_phrases <- unique(c(bu_exclusion, mei_exclusion))
+mandarin_exclusion_phrases <- mandarin_exclusion_phrases[
+  order(nchar(mandarin_exclusion_phrases), decreasing = TRUE)
+]
 
-# Only mark gen(跟) when it is likely used as a conjunction ("and"),
-# i.e., flanked by nominal-type elements (nouns or pronouns) on both sides.
-mandarin_tokens$word[
-  mandarin_tokens$gloss == "跟" &
-  str_detect(mandarin_tokens$prev_pos, "^(n|pro)") &
-  str_detect(mandarin_tokens$next_pos, "^(n|pro)")
-] <- "跟"
+mandarin_exclusion_regex <- map_chr(mandarin_exclusion_phrases, phrase_pattern)
+
+# Special case for 不过: only joined 不过 is the connective ("however").
+# Split 不 过 is always verb + 不过 = "can't beat / can't get past" (打 不 过).
+# because 不 过 来 / 不 过 去 means "not come/go over" (real negation).
+mandarin_exclusion_regex[mandarin_exclusion_phrases == "不过"] <- "不过"
+mandarin_exclusion_regex[mandarin_exclusion_phrases == "不過"] <- "不過"
+mandarin_exclusion_regex[mandarin_exclusion_phrases == "要不"] <- "要 ?不(?! ?要)"
+mandarin_exclusion_regex[mandarin_exclusion_phrases == "可不"] <- "可 ?不(?! ?可)"
+
+# Match an excluded expression at a word or punctuation boundary.
+mandarin_exclusion_pattern <- paste0(
+  "(?<![\\p{L}\\p{N}])(?:",
+  paste(mandarin_exclusion_regex, collapse = "|"),
+  ")(?![\\p{L}\\p{N}])"
+)
+
+# A-not-A: a word starting with character X (not a negator), then 不/没/沒,
+# then X again. Matches 是不是, 是 不 是, 有没有, 要 不 要, 喜欢 不 喜欢.
+mandarin_a_not_a_pattern <-
+  "(?<![\\p{L}\\p{N}])(?![不没沒])(\\p{L})\\S* ?[不没沒] ?\\1"
+
+# Step 1: flag A-not-A questions (they count as negation).
+# Step 2: remove excluded phrases.
+# Step 3: negation if any 不/没/沒 is left, or it is an A-not-A question.
+mandarin_code_negation <- function(data) {
+  data %>%
+    mutate(
+      gloss_text = coalesce(as.character(gloss), ""),
+      a_not_a = str_detect(gloss_text, mandarin_a_not_a_pattern),
+      gloss_no_exclusions = str_squish(
+        str_remove_all(gloss_text, mandarin_exclusion_pattern)
+      ),
+      negation = a_not_a | str_detect(gloss_no_exclusions, mandarin_negators)
+    ) %>%
+    select(-gloss_text)
+}
+
+mandarin_utterances <- mandarin_code_negation(mandarin_utterances)
 ```
 
-## Word Categories
+# Classify Negation
 
-Assigns matched words to their lexical function categories; leaves unmatched tokens as `nonfunction`.
+Classifies negation at the utterance level and maps its category and scope to token rows in `mandarin_tokens`.
 
-```{r wordcategories}
-mandarin_tokens$word_category <- "nonfunction"
+## Classify Utterance Scope
 
-mandarin_tokens$word_category[mandarin_tokens$word %in% c("不","不是","没", "没有")] <- "Negation"
-mandarin_tokens$word_category[mandarin_tokens$word %in% c("和", "跟", "而且")] <- "Conjunction"
-mandarin_tokens$word_category[mandarin_tokens$word %in% c("或者", "还是")] <- "Disjunction"
-mandarin_tokens$word_category[mandarin_tokens$word %in% c("如果", "要是", "的话")] <- "Conditionals"
+Applies `classify_negation` and `mandarin_negation_rules` to assign `negation_rule` and `negation_type` to negation utterances.
+
+```{r mandarin_categorization}
+# ---- Word lists ----
+# Removed from the END of the utterance (了 and 的 included).
+mandarin_particles <- c(
+  "了", "的", "啊", "呀", "哇", "哪", "吧", "嘛", "啦", "哦", "喔", "噢",
+  "呢", "耶", "咯", "喽", "囉", "啰", "嘞", "哈"
+)
+# Removed from the START and the END.
+mandarin_interjections <- c("嗯", "哎", "唉", "诶", "欸", "哼")
+# Used only for 不 + new clause (不 妈妈 我 要). NOT removed from the end,
+# because 不 能 打 妈妈 / 不 是 妈妈 use them as objects.
+mandarin_address_terms <- c(
+  "妈妈", "媽媽", "爸爸", "宝宝", "寶寶", "奶奶",
+  "爷爷", "爺爺", "姐姐", "哥哥", "阿姨"
+)
+# A pronoun after the negator means a sentence (不 给 你), not a short answer.
+mandarin_pronouns <- c(
+  "我", "你", "妳", "他", "她", "它", "咱", "我们", "你们", "他们",
+  "这", "那", "这个", "那个", "什么"
+)
+# POS tags allowed for the word after the negator.
+mandarin_pos_allowed <- c("verb", "adj", "aux")
+
+# Which rule leads to which type.
+mandarin_negation_rules <- tribble(
+  ~negation_rule,                 ~negation_type,
+  "bare_negator",                 "discourse",   # 不, 没有, 没 了
+  "negator_plus_verb",            "discourse",   # 不 要, 不 知道, 不 玩 了
+  "bu_then_clause",               "discourse",   # 不 我 要 那个
+  "bu_then_clause_with_negator",  "mixed",       # 不 我 不 要
+  "question_ma",                  "sentential",  # 没有 吗
+  "negator_not_first",            "sentential",  # 我 不 要, 是不是
+  "more_content",                 "sentential",  # 不 玩 积木
+  "pronoun_follows",              "sentential",  # 不 给 你
+  "pos_not_verb_adj",             "sentential"   # 没有 人 (noun)
+)
+
+# ---- Classify ONE negation utterance; returns the rule name ----
+# words: the words of gloss_no_exclusions
+# tags:  the matching POS tags, or NULL when the tags can't be used
+classify_negation <- function(words, tags = NULL) {
+  if (is.null(tags)) tags <- rep(NA_character_, length(words))
+  words <- str_replace(words, "^不{2,}$", "不")  # joined 不不 -> 不
+
+  # Questions ending in 吗 are sentential: 没有 吗, 不是 吗
+  if (words[length(words)] %in% c("吗", "嗎")) return("question_ma")
+
+  # Step 1a: drop interjections at the start (嗯 不 -> 不)
+  while (length(words) > 0 && words[1] %in% mandarin_interjections) {
+    words <- words[-1]
+    tags  <- tags[-1]
+  }
+  # Step 1b: drop particles, 了 and interjections at the end
+  ending_words <- c(mandarin_particles, mandarin_interjections)
+  while (length(words) > 0 && words[length(words)] %in% ending_words) {
+    words <- words[-length(words)]
+    tags  <- tags[-length(tags)]
+  }
+  # Step 1c: collapse exact repeats (不 要 不 要 -> 不 要, 不 不 不 -> 不)
+  n <- length(words)
+  for (m in seq_len(n %/% 2)) {
+    if (n %% m == 0 && identical(words, rep(words[1:m], n / m))) {
+      words <- words[1:m]
+      tags  <- tags[1:m]
+      break
+    }
+  }
+
+  # Step 2: the negator must come first; otherwise it is inside a sentence
+  if (length(words) == 0 || !str_detect(words[1], "^[不没沒]")) return("negator_not_first")
+
+  # Drop extra leading 不 (不 不 我 要 -> 不 我 要)
+  while (length(words) > 1 && words[1] == "不" && words[2] == "不") {
+    words <- words[-1]
+    tags  <- tags[-1]
+  }
+
+  # 不 + a new clause: 不 我 要 那个 ("No, I want that one").
+  # If the new clause has its own negator (不 我 不 要), it is mixed.
+  if (words[1] == "不" && length(words) > 1 &&
+      words[2] %in% c(mandarin_pronouns, mandarin_address_terms)) {
+    if (any(str_detect(words[-(1:2)], "[不没沒]"))) return("bu_then_clause_with_negator")
+    return("bu_then_clause")
+  }
+
+  # Step 3: look at what follows the negator.
+  # 不要 -> 要, 不 知道 -> 知道, 没有 -> (nothing)
+  after_negator <- c(str_remove(words[1], "^(?:[没沒]有|[不没沒])"), words[-1])
+  after_tags <- tags[-1]  # the negator word's own tag isn't needed
+
+  if (all(after_negator == "")) return("bare_negator")
+  if (nchar(paste(after_negator, collapse = "")) > 2) return("more_content")
+  if (any(words[-1] %in% mandarin_pronouns)) return("pronoun_follows")
+  if (any(!is.na(after_tags) & !after_tags %in% mandarin_pos_allowed)) return("pos_not_verb_adj")
+  "negator_plus_verb"
+}
+
+# ---- Apply to the data ----
+mandarin_code_negation_type <- function(data) {
+  gloss_clean <- str_squish(coalesce(as.character(data$gloss), ""))
+  pos_clean   <- str_squish(coalesce(as.character(data$part_of_speech), ""))
+  words <- str_split(str_squish(data$gloss_no_exclusions), " ")
+  tags  <- str_split(pos_clean, " ")
+
+  # Use the POS tags only when there is one tag per word and no exclusion
+  # phrase was removed (removing one would shift the words out of line).
+  data$pos_usable <- pos_clean != "" &
+    lengths(tags) == lengths(str_split(gloss_clean, " ")) &
+    data$gloss_no_exclusions == gloss_clean
+
+  # Only negation utterances get a rule; the rest stay NA.
+  negation_rule <- rep(NA_character_, nrow(data))
+  for (i in which(data$negation)) {
+    negation_rule[i] <- classify_negation(
+      words[[i]], if (data$pos_usable[i]) tags[[i]] else NULL
+    )
+  }
+  data$negation_rule <- negation_rule
+
+  data %>%
+    select(-any_of("negation_type")) %>%  # safe to rerun
+    left_join(mandarin_negation_rules, by = "negation_rule")
+}
+
+mandarin_utterances <- mandarin_code_negation_type(mandarin_utterances)
+count(mandarin_utterances, negation_type)
 ```
 
-## Syntactic Category
+## Map Scope to Tokens
 
-Labels identified function words `Function` and other tokens `nonfunction`.
+Splits `mandarin_utterances$gloss` into `mandarin_tokens` and assigns `negation_category` and token-level `negation_scope` while masking excluded phrases.
 
-```{r syncategory}
-mandarin_tokens$syncategory <- "Function"
-mandarin_tokens$syncategory[mandarin_tokens$word_category == "nonfunction"] <- "nonfunction"
-```
+```{r mandarin_splittoken}
+# Mark tokens covered by an exclusion phrase. Each matched character is
+# replaced with a placeholder and spaces are kept, so the masked string
+# splits into exactly the same tokens as the original.
+mandarin_mask <- "\uE000"
 
-# Negation Word Normalization
-
-Normalizes split and unsplit negators, clears recognized question patterns, and flags excluded non-negation structures while retaining their rows.
-
-## Normalize Negators
-
-Codes `不`, `不是`, `没`, and `没有`, treating adjacent split forms as one expression on the first token. Clears negation labels from continuation tokens and recognized `是不是` patterns.
-
-```{r negation_clean}
-mandarin_negation_levels <- c("不", "不是", "没", "没有")
-
-mandarin_tokens <- mandarin_tokens %>%
-  arrange(transcript_id, utterance_id, token_order) %>%
-  group_by(transcript_id, utterance_id) %>%
+mandarin_tokens <- mandarin_utterances %>%
   mutate(
-    prev_adj = coalesce(token_order - lag(token_order) == 1, FALSE),
-    next_adj = coalesce(lead(token_order) - token_order == 1, FALSE),
+    .gloss  = str_squish(coalesce(as.character(gloss), "")),
+    .masked = str_replace_all(
+      .gloss, mandarin_exclusion_pattern,
+      function(m) str_replace_all(m, "\\S", mandarin_mask)
+    ),
+    token        = str_split(.gloss, " "),
+    token_masked = str_split(.masked, " "),
+    .pos         = str_split(str_squish(coalesce(as.character(part_of_speech), "")), " "),
+    # Keep per-token POS only when there is one tag per token
+    token_pos = map2(.pos, token, function(p, t) {
+      if (length(p) == length(t)) p else rep(NA_character_, length(t))
+    })
+  ) %>%
+  select(-.gloss, -.masked, -.pos) %>%
+  unnest(c(token, token_masked, token_pos)) %>%
+  filter(token != "") %>%
+  group_by(id) %>%
+  mutate(token_order = row_number()) %>%
+  ungroup()
 
-    is_split_start = (gloss == "不" & next_adj & next_gloss == "是") |
-                      (gloss == "没" & next_adj & next_gloss == "有"),
-
-    negation_is_continuation = coalesce(lag(is_split_start) & prev_adj, FALSE),
-
-    is_shi_bu_shi = gloss == "是不是" |
-      (gloss == "不是" & prev_adj & prev_gloss == "是") |
-      (gloss == "不"   & prev_adj & prev_gloss == "是" & next_adj & next_gloss == "是"),
-
+# One token = at most one negation occurrence (same unit as English).
+mandarin_tokens <- mandarin_tokens %>%
+  mutate(
+    token_excluded = str_detect(token_masked, paste0("^", mandarin_mask, "+$")),
+    .is_neg = !token_excluded & str_detect(token, "[不没沒]"),
     negation_category = case_when(
-      is_shi_bu_shi | negation_is_continuation ~ NA_character_,
-      gloss == "不是" | (gloss == "不" & is_split_start) ~ "不是",
-      gloss == "没有" | (gloss == "没" & is_split_start) ~ "没有",
-      gloss == "不" ~ "不",
-      gloss == "没" ~ "没",
-      TRUE ~ NA_character_
+      !.is_neg ~ NA_character_,
+      str_detect(token, "不") ~ "bu",
+      TRUE ~ "mei"
     )
   ) %>%
-  ungroup() %>%
+  select(-token_masked, -.is_neg) %>%
+  group_by(id) %>%
   mutate(
-    word = case_when(
-      negation_is_continuation ~ "nonfunction",
-      !is.na(negation_category) ~ negation_category,
-      word %in% mandarin_negation_levels | word_category == "Negation" ~ "nonfunction",
-      TRUE ~ coalesce(as.character(word), "nonfunction")
-    ),
-    word_category = case_when(
-      word %in% mandarin_negation_levels ~ "Negation",
-      word %in% c("和", "跟", "而且") ~ "Conjunction",
-      word %in% c("或者", "还是") ~ "Disjunction",
-      word %in% c("如果", "要是", "的话") ~ "Conditionals",
-      TRUE ~ "nonfunction"
-    ),
-    syncategory = if_else(word_category == "nonfunction", "nonfunction", "Function")
-  ) %>%
-  
-  select(-prev_adj, -next_adj, -is_split_start, -is_shi_bu_shi, -negation_is_continuation)
-```
-
-## Exclude Non-negation Structures
-
-Flags adjacent A-not-A patterns and utterance-final negative alternatives, clearing their function-word labels while preserving diagnostic exclusion reasons.
-
-```{r negation_remove_nonnegation}
-
-mandarin_tokens <- mandarin_tokens %>%
-  arrange(transcript_id, utterance_id, token_order) %>%
-  group_by(transcript_id, utterance_id) %>%
-  mutate(
-    prev_adj = coalesce(token_order - lag(token_order) == 1, FALSE),
-    next_adj = coalesce(lead(token_order) - token_order == 1, FALSE),
-    
-    is_end = is.na(next_gloss) |
-      coalesce(
-        next_adj &
-        (
-          (gloss == "不" & next_gloss == "是") |
-          (gloss == "没" & next_gloss == "有")
-        ) &
-        is.na(next2_gloss),
-      FALSE
-    ),
-
-    negation_exclusion = case_when(
-      is.na(negation_category) ~ NA_character_,
-      # A_not_A format
-      prev_adj & next_adj & (
-        (gloss %in% c("不", "没") & (prev_gloss == next_gloss | startsWith(next_gloss, prev_gloss))) |
-        (gloss == "不是" & prev_gloss == "是") |
-        (gloss == "没有" & prev_gloss == "有")
-      ) ~ "A_not_A",
-      
-      # Utterance-final negative alternative in a question.
-      prev_adj & is_end & (
-        coalesce(utterance_type == "interrogative", FALSE) |
-        prev_gloss %in% c("了", "过", "好", "完")
-      ) ~ "final_alternative_question",
-
-      TRUE ~ NA_character_
-    )
-  ) %>%
-  mutate(
-    word          = if_else(!is.na(negation_exclusion), "nonfunction", word),
-    word_category = if_else(!is.na(negation_exclusion), "nonfunction", word_category),
-    syncategory   = if_else(!is.na(negation_exclusion), "nonfunction", syncategory)
-  ) %>%
-  ungroup() %>%
-  select(-prev_adj, -next_adj, -is_end)
-```
-
-# Sentential vs. Discourse Negation
-
-Assigns scope after exclusions using manual case-ID overrides, utterance-initial discourse patterns, and POS-based sentential rules. Leaves unmatched eligible negators `uncertain` and displays counts by negator and scope.
-
-```{r negation_categorization}
-mandarin_manual_negation_scope <- character(0)
-
-mandarin_pure_discourse_particles <- c(
-  "啊", "呀", "吧", "呢", "啦", "哦", "哈",
-  "哇", "呗", "嘛", "哼", "哎", "么", "哩"
-)
-
-if (
-  length(mandarin_manual_negation_scope) > 0 &&
-  (
-    is.null(names(mandarin_manual_negation_scope)) ||
-    any(names(mandarin_manual_negation_scope) == "") ||
-    anyDuplicated(names(mandarin_manual_negation_scope)) > 0 ||
-    !all(mandarin_manual_negation_scope %in%
-           c("sentential", "discourse", "uncertain"))
-  )
-) {
-  stop("Manual negation-scope codes must have unique case IDs and valid labels.")
-}
-
-mandarin_tokens <- mandarin_tokens %>%
-  arrange(transcript_id, utterance_id, token_order) %>%
-  group_by(transcript_id, utterance_id) %>%
-  mutate(
-    .case_id = str_c(
-      transcript_id, utterance_id, token_order,
-      sep = "|"
-    ),
-
-    .is_split = coalesce(
-      (gloss == "不" & next_gloss == "是") |
-        (gloss == "没" & next_gloss == "有"),
-      FALSE
-    ),
-    
-    .target_next_pos = toupper(trimws(coalesce(
-      if_else(.is_split, next2_pos, next_pos), ""
-    ))),
-
-    .target_next_gloss = if_else(
-      .is_split, next2_gloss, next_gloss
-    ),
-
-    .prev_pos_upper = toupper(
-      trimws(coalesce(prev_pos, ""))
-    ),
-
-    .current_pos_upper = toupper(trimws(coalesce(part_of_speech, ""))),
-
-    .is_utt_start = is.na(prev_gloss) | prev_gloss == "",
-
-    .has_prev_context = .prev_pos_upper %in%
-      c("NOUN", "PRON", "PROPN", "DET", "ADP"),
-
-    .tail_token_ok =
-      .current_pos_upper %in% c("PUNCT", "INTJ", "SFP") |
-      gloss %in% mandarin_pure_discourse_particles |
-      str_detect(
-        coalesce(gloss, ""),
-        "^[，。！？、；：,.!?;:…]+$"
-      ),
-
-    .tail_all_clean = rev(cumall(rev(.tail_token_ok))),
-
-    .is_standalone = .is_utt_start &
-      if_else(
-        .is_split,
-        is.na(next2_gloss) | next2_gloss == "",
-        is.na(next_gloss) | next_gloss == ""
-      ),
-
-    .is_pure_discourse_response = .is_utt_start &
-      if_else(
-        .is_split,
-        coalesce(lead(.tail_all_clean, 2L), FALSE),
-        coalesce(lead(.tail_all_clean), FALSE)
-      ),
-
-    .is_turn_initial_discourse = .is_utt_start &
-      (
-        .target_next_pos == "PUNCT" |
-          str_detect(
-            coalesce(.target_next_gloss, ""),
-            "^[，。！？、；：,.!?;:…]+$"
-          )
-      ),
-
+    # For "mixed" (不 我 不 要): negators before the new clause are
+    # discourse, negators inside the clause are sentential.
+    .clause_started = cumsum(token %in% c(mandarin_pronouns, mandarin_address_terms)) > 0,
     negation_scope = case_when(
-
-  is.na(negation_category) |
-    !is.na(negation_exclusion) ~ NA_character_,
-
-  .case_id %in% names(mandarin_manual_negation_scope) ~
-    unname(mandarin_manual_negation_scope[.case_id]),
-
-  .is_standalone |
-    .is_pure_discourse_response |
-    .is_turn_initial_discourse ~ "discourse",
-
-  negation_category %in% c("不", "没") &
-    .target_next_pos %in%
-      c("VERB", "AUX", "ADJ", "ADV", "ADP", "SCONJ") ~
-    "sentential",
-
-  negation_category %in% c("没", "没有", "不是") &
-    .target_next_pos %in%
-      c("NOUN", "PRON", "PROPN", "NUM", "DET", "N:LET", "L2") ~
-    "sentential",
-
-  negation_category %in% c("不是", "没有") &
-    (
-      .has_prev_context |
-        .target_next_pos %in%
-          c("VERB", "AUX", "ADJ", "ADV", "ADP", "SCONJ")
-    ) ~
-    "sentential",
-
-  negation_category == "没" &
-    .has_prev_context &
-    (
-      is.na(.target_next_gloss) |
-        .target_next_gloss == "" |
-        .target_next_pos %in% c("PUNCT", "SFP") |
-        .target_next_gloss %in% mandarin_pure_discourse_particles
-    ) ~
-    "sentential",
-
-  TRUE ~ "uncertain"
+      is.na(negation_category) ~ NA_character_,
+      negation_type == "mixed" & !.clause_started ~ "discourse",
+      negation_type == "mixed" ~ "sentential",
+      TRUE ~ negation_type
     )
   ) %>%
   ungroup() %>%
-  select(-starts_with("."))
+  select(-.clause_started)
 
-mandarin_negation_scope_counts_step3 <- mandarin_tokens %>%
-  filter(!is.na(negation_scope)) %>%
-  count(negation_category, negation_scope, name = "count") %>%
-  complete(
-    negation_category = mandarin_negation_levels,
-    negation_scope = c("sentential", "discourse", "uncertain"),
-    fill = list(count = 0L)
-  )
-mandarin_negation_scope_counts_step3
+
+# Sanity checks: every negator token should sit in a negation utterance.
+count(mandarin_tokens, token_excluded, negation_category)
+count(mandarin_tokens, negation_category, has_type = !is.na(negation_type))
 ```
-
 # Save Processed Data
 
-Saves the annotated token table to `mandarin_data/processed_data/mandarin_tokens_processed.feather`.
+Saves `mandarin_tokens` to `mandarin_data/processed_data/mandarin_tokens_processed.feather` for downstream counts and plots.
 
 ```{r save_processed_data}
 write_feather(
-  mandarin_tokens,
+  mandarin_tokens %>%
+    select(-any_of(c("negation", "a_not_a", "negation_rule", "negation_type",
+                     "gloss_no_exclusions", "pos_usable"))) %>%
+    rename(utterance_id = id,
+           utterance_gloss = gloss, gloss = token,
+           utterance_pos = part_of_speech, part_of_speech = token_pos),
   file.path(mandarin_processed_dir, "mandarin_tokens_processed.feather")
 )
 ```
+

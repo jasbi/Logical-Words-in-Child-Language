@@ -5,13 +5,13 @@ date: "`r Sys.Date()`"
 output: pdf_document
 ---
 
-# How to Use This File
+# Overview
 
-Runs the French extraction from CHILDES token import through negation coding to the processed Feather export. Set the working directory to `french`, install `childesr`, `tidyverse`, and `arrow`, then run chunks in order. Matching raw caches are reused unless `french_force_download` is `TRUE`; the final file is `french_data/processed_data/french_tokens_processed.feather`.
+Runs the French extraction from CHILDES tokens through negation coding to `french_data/processed_data/french_tokens_processed.feather`; uses `french` as the working directory with `childesr`, `tidyverse`, and `arrow`, and reuses matching raw caches. Review `french_pas_noun_spotcheck.csv` after the first run, add confirmed noun token IDs to `french_pas_noun_manual_ids`, and rerun from target-word definition.
 
 # Setup
 
-Loads the packages, sets knitr options, and creates relative raw and processed data directories.
+Loads `childesr`, `tidyverse`, and `arrow`, configures knitr, and creates `french_raw_dir` and `french_processed_dir`.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -39,15 +39,19 @@ dir.create(french_processed_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Load Data
 
-Loads the selected French corpora from CHILDES release 2026.1 or matching local caches. Validates the imported columns and cache source record before token processing.
+Selects CHILDES source corpora and imports tokens into `french_all_tokens` for annotation.
+
+## Select Corpora
+
+Selects the French collection in `french_target_collection` for CHILDES release `french_db_version`.
 
 ```{r collections}
 french_target_collection <- "French"
 ```
 
-## Import Tokens
+## Import Data
 
-Loads a matching raw cache or requests tokens for the selected corpus or collection. Validates columns and row counts, then saves new raw data with its query source record.
+Downloads or reuses French collection tokens in `french_all_tokens` and validates required columns and the cached row count.
 
 ```{r import_tokens}
 # Only use caches belonging to the pinned release and the same query.
@@ -55,7 +59,7 @@ french_feather_path <- file.path(french_raw_dir, "all_french_tokens.feather")
 french_csv_path <- file.path(french_raw_dir, "all_french_tokens.csv")
 french_source_info_path <- file.path(french_raw_dir, "all_french_tokens_source.rds")
 
-french_query_roles <- c("Target_Child", "Mother", "Father")
+french_query_roles <- NULL
 
 french_query_info <- list(
   db_version = french_db_version,
@@ -126,7 +130,7 @@ if (is.null(french_all_tokens) || nrow(french_all_tokens) == 0L) {
 
 # Check that the expected columns are available.
 french_required_columns <- c(
-  "target_child_id", "target_child_age", "transcript_id", "utterance_id",
+  "id", "target_child_id", "target_child_age", "transcript_id", "utterance_id",
   "token_order", "gloss", "part_of_speech", "speaker_role",
   "speaker_code", "utterance_type"
 )
@@ -185,11 +189,11 @@ cat(sprintf(
 
 # Token Processing
 
-Screens target-child ages, records exclusion counts, and adds speaker, completed-month age, and utterance-type labels. Builds neighboring-token context for later matching.
+Filters `french_tokens` by `target_child_age` and assigns speaker, age, and utterance-type fields before negation coding.
 
-## Exclusions
+## Filter Ages and Count Exclusions
 
-Keeps finite target-child ages from birth to under 72 months. Counts tokens and unique child IDs, including a missing ID as one distinct value, and retains observed tokens at ages 0–10.
+Filters `french_all_tokens` to finite `target_child_age` values from 0 to under 72 months and records row and child counts in `french_exclusions`. Lowercases `gloss` before filtering.
 
 ```{r exclusions}
 french_n_tokens_before_exclusions <- nrow(french_all_tokens)
@@ -226,7 +230,7 @@ french_exclusions
 
 ## Save Exclusion Records
 
-Saves the exclusion summary and retained token rows as CSV files in the raw-data directory.
+Saves `french_exclusions` and the age-filtered `french_tokens` as CSV files in `french_raw_dir`.
 
 ```{r save_exclusions}
 readr::write_csv(
@@ -239,39 +243,31 @@ readr::write_csv(
 )
 ```
 
-## Speaker Roles
+## Assign Speaker Roles
 
-Maps target-child roles to `child` and mother or father roles to `parent` after case normalization. Stops if a role is missing or unexpected.
+Maps target-child roles to `child` and every other role, including missing values, to `parent` in `french_tokens$speaker`.
 
 ```{r speaker_roles}
 french_tokens <- french_tokens %>%
   mutate(
     speaker = case_when(
       str_to_lower(as.character(speaker_role), locale = "en") == "target_child" ~ "child",
-      str_to_lower(as.character(speaker_role), locale = "en") %in%
-        c("mother", "father") ~ "parent",
-      TRUE ~ NA_character_
+      TRUE ~ "parent"
     )
   )
-
-if (anyNA(french_tokens$speaker)) {
-  french_invalid_speaker_roles <- unique(as.character(french_tokens$speaker_role[is.na(french_tokens$speaker)]))
-  french_invalid_speaker_roles[is.na(french_invalid_speaker_roles)] <- "<missing>"
-  stop("Unexpected or missing speaker roles: ", paste(french_invalid_speaker_roles, collapse = ", "))
-}
 ```
 
-## Age
+## Calculate Age in Months
 
-Calculates completed-month age by flooring the screened target-child age.
+Calculates `french_tokens$age` as the floor of `target_child_age` in months.
 
 ```{r age}
 french_tokens$age <- french_tokens$target_child_age %>% floor()
 ```
 
-## Utterance Types
+## Recode Utterance Types
 
-Recodes specified question, imperative, and disrupted utterance labels; leaves unlisted labels unchanged.
+Recodes question, imperative, and disrupted labels from `utterance_type` into `french_tokens$utterance_type`, leaving unlisted values unchanged.
 
 ```{r utterance_types}
 # Prepare the utterance_type categories for this study based on the utterance_types in childes-db
@@ -295,113 +291,211 @@ french_tokens$utterance_type <-
   )
 ```
 
-## Context
-
-Records neighboring glosses and part-of-speech tags within each utterance and initializes `word` to `nonfunction`.
-
-```{r context}
-french_tokens <- french_tokens %>%
-  arrange(transcript_id, utterance_id, token_order) %>%
-  group_by(transcript_id, utterance_id) %>%
-  mutate(
-    prev2_gloss = lag(gloss, 2),
-    prev_gloss  = lag(gloss),
-    next_gloss  = lead(gloss),
-    next2_gloss = lead(gloss, 2),
-    prev2_pos   = lag(part_of_speech, 2),
-    prev_pos    = lag(part_of_speech),
-    next_pos    = lead(part_of_speech),
-    next2_pos   = lead(part_of_speech, 2)
-  ) %>%
-  ungroup()
-
-french_tokens$word <- "nonfunction"
-```
-
 # Define Target Words
 
-Marks `pas` and `non` as candidate negation words and assigns function-word labels.
-
-## Mark Target Words
-
-Marks exact gloss matches for `pas` and `non`.
+Defines `french_negator_forms`, noun-`pas` overrides, fixed-expression lists, and interjections used in later matching.
 
 ```{r function_words}
-french_function_words <- c("pas", "non")
+# Negator forms: name = form in the transcript, value = counted category.
+french_negator_forms <- c(pas = "pas", non = "non", nan = "non")
 
-for (x in french_function_words) {
-  french_tokens$word[french_tokens$gloss == x] <- x
-}
+# Noun pas ("step"): POS tags treated as nouns. "neg" does not match.
+french_noun_pos_regex <- "^(n|noun)(:|$)"
+
+# Token IDs (childes-db `id`) of pas confirmed as nouns in the spot-check
+# but not tagged as nouns (e.g. transcripts without %mor).
+french_pas_noun_manual_ids <- integer(0)
+
+# Words before pas that send it to the noun spot-check (determiners, numbers).
+french_det_num_before_pas <- c(
+  "un", "une", "le", "la", "l'", "les", "des", "du", "ce", "cet", "ces",
+  "mon", "ton", "son", "mes", "tes", "ses", "notre", "votre", "nos", "vos",
+  "leur", "leurs", "quelques", "plusieurs", "chaque",
+  "petit", "petits", "grand", "grands", "gros", "premier", "premiers",
+  "dernier", "derniers",
+  "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix",
+  "onze", "douze", "vingt", "cent", "mille"
+)
+
+# Fixed expressions with pas that do not negate.
+# Accented forms are written as \u escapes so matching works under any locale.
+french_problem_words <- c("problème", "probleme", "problèmes", "problemes",
+                          "souci", "soucis")
+
+# "pas mal": excluded as "not bad / quite a lot", but kept as negation when it
+# means "doesn't hurt" (after a form of faire/avoir, not followed by "de").
+# Set to FALSE to exclude every "pas mal", as the rule document is worded.
+french_hurt_verbs <- c("fait", "fais", "font", "faisait", "fera", "ferait",
+                       "ai", "as", "a", "avait", "avais", "ont", "avez", "avons")
+
+# Words that do not count as "other content" before a tag-question non.
+french_interjections <- c("ah", "oh", "eh", "euh", "bah", "ben", "mais", "hein")
 ```
 
-## Word Categories
+# Classify Negation
 
-Labels matched negators `Negation` and other tokens `nonfunction`.
+Builds a word-level context table, excludes non-negating `pas`, assigns scope, and maps the results back to `french_tokens`.
 
-```{r wordcategories}
-french_tokens$word_category <- "nonfunction"
-french_tokens$word_category[french_tokens$word %in% c("pas", "non")] <- "Negation"
-```
+## Build Word Context
 
-## Syntactic Category
+Normalizes `french_tokens$gloss`, splits compound forms into `french_words`, and adds neighboring words and `neg_form` for matching.
 
-Labels identified function words `Function` and other tokens `nonfunction`.
-
-```{r syncategory}
-french_tokens$syncategory <- "Function"
-french_tokens$syncategory[french_tokens$word_category == "nonfunction"] <- "nonfunction"
-```
-
-# Negation Word Normalization
-
-Excludes noun uses of `pas` from negation coding and records eligible `pas` or `non` in `negation_category`.
-
-```{r negation_clean}
+```{r negation_words}
 french_tokens <- french_tokens %>%
   mutate(
-    is_noun_pas = gloss %in% "pas" & part_of_speech %in% c("noun", "n"),
+    .row_id = row_number(),
+    gloss_norm = gloss %>%
+      str_replace_all("[’ʼ`]", "'") %>%
+      str_replace_all("-", "_") %>%
+      str_replace_all("[^\\p{L}\\p{N}'_+ ]", "") %>%
+      str_squish()
+  )
 
-    negation_category = case_when(
-      is_noun_pas ~ NA_character_,
-      gloss == "pas" ~ "pas",
-      gloss == "non" ~ "non",
-      TRUE ~ NA_character_
-    )
-  ) %>%
+french_words <- french_tokens %>%
+  select(.row_id, token_id = id, target_child_id, transcript_id, utterance_id,
+         token_order, speaker, utterance_type, gloss_norm, part_of_speech) %>%
+  mutate(part = str_split(coalesce(gloss_norm, ""), "[_+ ]+|(?<=')")) %>%
+  unnest_longer(part, indices_to = "part_order") %>%
+  filter(part != "") %>%
+  group_by(.row_id) %>%
+  mutate(n_parts = n()) %>%
+  ungroup() %>%
+  arrange(transcript_id, utterance_id, token_order, part_order) %>%
+  group_by(transcript_id, utterance_id) %>%
   mutate(
-    word = if_else(is_noun_pas, "nonfunction", word),
-    word_category = if_else(is_noun_pas, "nonfunction", word_category),
-    syncategory   = if_else(word_category == "nonfunction", "nonfunction", "Function")
+    w_order = row_number(),
+    n_w     = n(),
+    prev2 = lag(part, 2), prev  = lag(part),
+    nxt   = lead(part),   nxt2  = lead(part, 2),
+    neg_form = unname(french_negator_forms[part]),
+    # Words before this one that are neither interjections nor non/nan.
+    content_before = lag(cumsum(!(part %in% c(french_interjections, "non", "nan"))),
+                         default = 0L)
   ) %>%
-  select(-is_noun_pas)
+  ungroup()
 ```
 
-# Sentential vs. Discourse Negation
+## Exclude Noun pas and Fixed Expressions
 
-Labels `non` as `discourse` and eligible `pas` as `sentential`.
+Flags noun `pas` and fixed expressions in `french_words$excl_reason` using POS tags, manual token IDs, and neighboring words.
+
+```{r negation_exclusions}
+french_words <- french_words %>%
+  mutate(
+    is_pas = neg_form %in% "pas",
+    pas_mal_hurt = french_keep_pas_mal_hurt &
+      prev %in% french_hurt_verbs & !(nxt2 %in% "de"),
+    excl_reason = case_when(
+      is_pas & n_parts == 1 &
+        str_detect(coalesce(part_of_speech, ""), french_noun_pos_regex) ~ "noun_pas_pos",
+      is_pas & token_id %in% french_pas_noun_manual_ids                 ~ "noun_pas_manual",
+      is_pas & nxt %in% "grave"                                         ~ "pas_grave",
+      is_pas & nxt %in% "de" & nxt2 %in% french_problem_words           ~ "pas_de_probleme",
+      is_pas & nxt %in% "mal" & !pas_mal_hurt                           ~ "pas_mal"
+    )
+  ) %>%
+  select(-is_pas, -pas_mal_hurt)
+```
+
+## Assign Negation Scope
+
+Assigns `sentential` to remaining `pas` and specified `non` constructions, and assigns `discourse` to other included `non` in `french_words$negation_scope`.
 
 ```{r negation_categorization}
-french_tokens <- french_tokens %>%
-  arrange(transcript_id, utterance_id, token_order) %>%
+french_words <- french_words %>%
   mutate(
+    is_non = neg_form %in% "non",
+    # Specific constructions first, so "tu veux ou non ?" is ou_non, not a tag.
+    non_rule = case_when(
+      is_non & nxt %in% "plus"                                ~ "non_plus",
+      is_non & prev %in% "ou"                                 ~ "ou_non",
+      is_non & prev %in% "que" & !(prev2 %in% "parce")        ~ "que_non",
+      is_non & w_order == n_w & content_before > 0 &
+        utterance_type %in% "interrogative"                   ~ "tag_question"
+    ),
     negation_scope = case_when(
-      is.na(negation_category) ~ NA_character_,
-      negation_category == "non" ~ "discourse",
-      negation_category == "pas" ~ "sentential",
-      TRUE ~ "uncertain"
+      is.na(neg_form) | !is.na(excl_reason) ~ NA_character_,
+      neg_form == "pas"                     ~ "sentential",
+      !is.na(non_rule)                      ~ "sentential",
+      TRUE                                  ~ "discourse"
     )
   ) %>%
-  ungroup() %>%
-  select(-starts_with("."))
+  select(-is_non)
+```
+
+## Map Negation to Tokens
+
+Aggregates `french_words` into `n_pas`, `n_non`, scope, rules, exclusions, and function-word labels on `french_tokens`.
+
+```{r negation_tokens}
+french_neg_by_token <- french_words %>%
+  filter(!is.na(neg_form)) %>%
+  group_by(.row_id) %>%
+  summarise(
+    n_pas = sum(neg_form == "pas" & !is.na(negation_scope)),
+    n_non = sum(neg_form == "non" & !is.na(negation_scope)),
+    n_non_sentential = sum(neg_form == "non" & negation_scope %in% "sentential"),
+    n_non_discourse  = sum(neg_form == "non" & negation_scope %in% "discourse"),
+    negation_scope = str_c(sort(unique(na.omit(negation_scope))), collapse = "+"),
+    negation_rule = str_c(unique(na.omit(non_rule)), collapse = "+"),
+    negation_exclusion = str_c(unique(na.omit(excl_reason)), collapse = "+"),
+    .groups = "drop"
+  ) %>%
+  mutate(across(c(negation_scope, negation_rule, negation_exclusion), ~ na_if(.x, "")))
+
+french_tokens <- french_tokens %>%
+  select(-any_of(c("n_pas", "n_non", "n_non_sentential", "n_non_discourse",
+                   "negation_category", "negation_scope",
+                   "negation_rule", "negation_exclusion"))) %>%
+  left_join(french_neg_by_token, by = ".row_id") %>%
+  mutate(
+    across(c(n_pas, n_non, n_non_sentential, n_non_discourse), ~ coalesce(.x, 0L)),
+    negation_category = case_when(
+      n_pas > 0 & n_non > 0 ~ "pas+non",
+      n_pas > 0             ~ "pas",
+      n_non > 0             ~ "non"
+    ),
+    word = coalesce(negation_category, "nonfunction"),
+    word_category = if_else(!is.na(negation_category), "Negation", "nonfunction"),
+    syncategory = if_else(word_category == "nonfunction", "nonfunction", "Function")
+  )
+
+french_tokens %>%
+  filter(!is.na(negation_category)) %>%
+  count(speaker, negation_category, negation_scope, name = "n_tokens")
+```
+
+# Review Noun pas Candidates
+
+Saves `pas` tokens preceded by listed determiners, adjectives, or numbers, with context and current coding, to `french_pas_noun_spotcheck.csv`. Counts their `excl_reason` values for manual noun review.
+
+```{r pas_noun_spotcheck}
+french_utt_text <- french_words %>%
+  group_by(transcript_id, utterance_id) %>%
+  summarise(utt = str_c(part, collapse = " "), .groups = "drop")
+
+french_pas_spotcheck <- french_words %>%
+  filter(neg_form %in% "pas",
+         prev %in% french_det_num_before_pas | str_detect(coalesce(prev, ""), "^[0-9]+$")) %>%
+  left_join(french_utt_text, by = c("transcript_id", "utterance_id")) %>%
+  select(token_id, transcript_id, utterance_id, speaker, utt, prev, part, nxt,
+         part_of_speech, excl_reason, negation_scope)
+
+readr::write_csv(
+  french_pas_spotcheck,
+  file.path(french_processed_dir, "french_pas_noun_spotcheck.csv")
+)
+
+french_pas_spotcheck %>% count(excl_reason, name = "n_tokens")
 ```
 
 # Save Processed Data
 
-Saves the annotated token table to `french_data/processed_data/french_tokens_processed.feather`.
+Saves `french_tokens` to `french_data/processed_data/french_tokens_processed.feather` for downstream counts and plots.
 
 ```{r save_processed_data}
 write_feather(
-  french_tokens,
+  french_tokens %>% select(-.row_id),
   file.path(french_processed_dir, "french_tokens_processed.feather")
 )
 ```

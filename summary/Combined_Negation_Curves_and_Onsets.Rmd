@@ -1,0 +1,394 @@
+---
+title: "Combined Negation Growth Curves and Onsets"
+author: "Samantha Bai"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+# Overview
+
+Summarizes the fitted results saved by each language's PlotsAndCurves file and draws three figures. Does not refit any model.
+
+1. **Sentential growth curves**: every fitted sentential word-by-scope curve, all languages on one plot, colored by language.
+2. **Discourse growth curves**: the same for discourse.
+3. **Onset estimates**: the lag estimate and 95% credible interval of every curve, with sentential and discourse distinguished by color and shape in one panel.
+
+Lag is a growth-curve parameter, not the age of a child's first observed use.
+
+Run each language's PlotsAndCurves file first. For every language, this file reads three files from `../<language>/<language>_data/processed_data/`:
+
+- `<language>_sentential_negation_childdata.RDS` (columns `negation_category` or `word`, `age`, `cumulative_ppt`, `predictions`)
+- `<language>_discourse_negation_childdata.RDS` (same columns)
+- `<language>_negation_scope_age_of_production.RDS` (columns `category`, `word`, `Estimate`, `Est.Error`, `Q2.5`, `Q97.5`)
+
+# Setup
+
+Loads `tidyverse`, `ggrepel`, and `stringi`, configures the PDF graphics device, and creates `summary_dir`.
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(stringi)
+
+# Unicode-capable device for 不/没 and pinyin tone marks.
+knitr::opts_chunk$set(dev = "cairo_pdf", error = FALSE)
+
+summary_dir <- "../summary"
+dir.create(summary_dir, showWarnings = FALSE, recursive = TRUE)
+```
+
+# Configure Languages and Plot Options
+
+Defines `combined_languages`, `combined_scopes`, and `combined_word_labels`, along with the color and curve settings used in the figures.
+
+```{r settings}
+# Languages in display order. Colors are the first six slots of a palette
+# checked for color-blind separation; each language keeps its color in every plot.
+combined_languages <- tibble::tribble(
+  ~language,  ~slug,       ~color,
+  "Mandarin", "mandarin",  "#2a78d6",
+  "English",  "english",   "#eb6834",
+  "French",   "french",    "#1baf7a",
+  "Japanese", "japanese",  "#eda100",
+  "Spanish",  "spanish",   "#e87ba4",
+  "German",   "german",    "#008300"
+) %>%
+  mutate(data_dir = file.path("..", slug, paste0(slug, "_data"), "processed_data"))
+
+combined_language_colors <- setNames(combined_languages$color, combined_languages$language)
+
+# TRUE: skip a language whose files are missing (with a warning).
+# FALSE: stop, so a figure never silently leaves a language out.
+allow_missing_languages <- FALSE
+
+# TRUE: divide each curve by its own maximum, so every curve runs from 0 to 1
+# and the timing of growth is easier to compare across words with very
+# different frequencies. FALSE: plot fitted cumulative occurrences per 1,000 tokens.
+normalize_curves <- FALSE
+
+# Mandarin curve files store the character; the onset files store character + pinyin.
+combined_word_labels <- c("不" = "不 bù", "没" = "没 méi")
+
+combined_scopes <- c("Sentential", "Discourse")
+
+plot_base_size <- 16         # points (was 12)
+plot_label_size <- 5         # end-of-line labels on the curve plots, in mm (5 mm ≈ 14 pt; was 3.2)
+```
+
+# Load and Validate Saved Results
+
+Loads each language's curve and onset RDS files, standardizes their columns, and validates shared `language`–`category`–`word` keys.
+
+## Define Result Readers
+
+Defines `read_onsets()` and `read_curves()` to load saved RDS files, check required columns, and standardize word labels.
+
+```{r readers, include=FALSE}
+nfc <- function(x) stringi::stri_trans_nfc(as.character(x))
+
+relabel_word <- function(x) {
+  x <- nfc(x)
+  matched <- x %in% names(combined_word_labels)
+  x[matched] <- unname(combined_word_labels[x[matched]])
+  x
+}
+
+handle_missing <- function(path) {
+  msg <- paste0("Missing file: ", path,
+                "\nRun that language's PlotsAndCurves file first, ",
+                "or set allow_missing_languages <- TRUE.")
+  if (allow_missing_languages) {
+    warning(msg, call. = FALSE)
+    return(NULL)
+  }
+  stop(msg, call. = FALSE)
+}
+
+check_columns <- function(data, required, path) {
+  missing_columns <- setdiff(required, names(data))
+  if (length(missing_columns) > 0L) {
+    stop("File ", path, " is missing columns: ",
+         paste(missing_columns, collapse = ", "), call. = FALSE)
+  }
+}
+
+# One language's onset table, limited to sentential and discourse rows.
+read_onsets <- function(language, data_dir, slug) {
+  path <- file.path(data_dir, paste0(slug, "_negation_scope_age_of_production.RDS"))
+  if (!file.exists(path)) return(handle_missing(path))
+
+  data <- readRDS(path)
+  check_columns(data, c("category", "word", "Estimate", "Est.Error", "Q2.5", "Q97.5"), path)
+
+  if ("language" %in% names(data) && any(as.character(data$language) != language)) {
+    stop("File ", path, " contains rows for another language.", call. = FALSE)
+  }
+
+  data <- data %>%
+    transmute(
+      language = language,
+      category = str_to_title(as.character(category)),
+      word = relabel_word(word),
+      Estimate, Est.Error, Q2.5, Q97.5
+    )
+
+  # Held-out labels (e.g. Spanish o_no, German kein_np) are not plotted.
+  held_out <- filter(data, !category %in% combined_scopes)
+  if (nrow(held_out) > 0L) {
+    message(language, ": leaving out rows with category ",
+            paste(unique(held_out$category), collapse = ", "))
+  }
+  filter(data, category %in% combined_scopes)
+}
+
+# One language's fitted curves for one scope.
+read_curves <- function(language, data_dir, slug, scope) {
+  path <- file.path(data_dir, paste0(slug, "_", tolower(scope), "_negation_childdata.RDS"))
+  if (!file.exists(path)) return(handle_missing(path))
+
+  data <- readRDS(path)
+  word_col <- intersect(c("negation_category", "word"), names(data))[1]
+  if (is.na(word_col)) {
+    stop("File ", path, " has neither a negation_category nor a word column.", call. = FALSE)
+  }
+  check_columns(data, c("age", "cumulative_ppt", "predictions"), path)
+
+  data %>%
+    transmute(
+      language = language,
+      category = scope,
+      word = relabel_word(.data[[word_col]]),
+      age = as.numeric(age),
+      observed = as.numeric(cumulative_ppt),
+      predictions = as.numeric(predictions)
+    ) %>%
+    # All-zero series have no fitted values.
+    filter(is.finite(age), is.finite(predictions)) %>%
+    arrange(word, age)
+}
+```
+
+## Combine and Validate Results
+
+Loads and binds each language's tables into `combined_onsets` and `combined_curves`, checks matching keys, and saves the results to `summary_dir`.
+
+```{r load_results}
+combined_onsets <- pmap_dfr(
+  combined_languages %>% select(language, data_dir, slug),
+  read_onsets
+)
+
+combined_curves <- combined_languages %>%
+  select(language, data_dir, slug) %>%
+  crossing(scope = combined_scopes) %>%
+  pmap_dfr(read_curves)
+
+combined_keys <- c("language", "category", "word")
+
+if (anyDuplicated(combined_onsets[combined_keys]) > 0L) {
+  stop("Duplicate language-category-word rows across the onset tables.")
+}
+
+# Every fitted curve should have an onset estimate, and the other way round.
+combined_curve_keys <- distinct(combined_curves, across(all_of(combined_keys)))
+combined_no_onset <- anti_join(combined_curve_keys, combined_onsets, by = combined_keys)
+combined_no_curve <- anti_join(combined_onsets, combined_curve_keys, by = combined_keys)
+if (nrow(combined_no_onset) > 0L || nrow(combined_no_curve) > 0L) {
+  warning(
+    "Curves and onset tables do not match.\n",
+    "Curve without onset: ",
+    paste(apply(combined_no_onset, 1, paste, collapse = " / "), collapse = "; "), "\n",
+    "Onset without curve: ",
+    paste(apply(combined_no_curve[combined_keys], 1, paste, collapse = " / "), collapse = "; "),
+    call. = FALSE
+  )
+}
+
+language_levels <- intersect(combined_languages$language,
+                             unique(c(combined_onsets$language, combined_curves$language)))
+
+combined_onsets <- combined_onsets %>%
+  mutate(language = factor(language, levels = language_levels),
+         category = factor(category, levels = combined_scopes))
+combined_curves <- combined_curves %>%
+  mutate(language = factor(language, levels = language_levels),
+         category = factor(category, levels = combined_scopes))
+
+saveRDS(combined_onsets, file.path(summary_dir, "combined_negation_scope_age_of_production.RDS"))
+write_csv(combined_onsets, file.path(summary_dir, "combined_negation_scope_age_of_production.csv"))
+saveRDS(combined_curves, file.path(summary_dir, "combined_negation_scope_curves.RDS"))
+
+# What went into the figures.
+combined_onsets %>%
+  arrange(category, language, Estimate) %>%
+  mutate(across(c(Estimate, Est.Error, Q2.5, Q97.5), ~ round(.x, 1)))
+```
+
+# Plot Growth Curves
+
+Plots fitted `predictions` against `age` for each `word`, with color showing `language` and labels placed at line ends.
+
+## Define Growth Curve Plot
+
+Defines `plot_scope_curves()` to draw a growth-curve figure for each scope from `combined_curves`.
+
+```{r curve_plot_function, include=FALSE}
+plot_scope_curves <- function(scope) {
+    plot_data <- combined_curves %>%
+    filter(category == scope) %>%
+    group_by(language, word) %>%
+    # Observed and fitted values share one scale factor, so they stay comparable.
+    mutate(
+      scale_by = if (normalize_curves) max(predictions) else 1,
+      y = predictions / scale_by,
+      y_obs = observed / scale_by
+    ) %>%
+    ungroup()
+
+  if (nrow(plot_data) == 0L) {
+    return(ggplot() + theme_void() +
+             labs(title = paste(scope, "Negation: no fitted curves")))
+  }
+
+  # Label each line at its last fitted point.
+  line_ends <- plot_data %>%
+    group_by(language, word) %>%
+    slice_max(age, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(label = paste0(word, " (", language, ")"))
+
+  y_label <- if (normalize_curves) {
+    "Fitted cumulative rate (share of each curve's maximum)"
+  } else {
+    "Cumulative relative frequency (per thousand)"
+  }
+
+  ggplot(plot_data, aes(age, y, color = language, group = interaction(language, word))) +
+    geom_point(aes(y = y_obs), size = 1.3, alpha = 0.35, show.legend = FALSE) +
+    geom_line(linewidth = 0.9) +
+    geom_text_repel(
+      data = line_ends,
+      aes(label = label),
+      color = "grey25", size = plot_label_size,
+      direction = "y", hjust = 0, nudge_x = 2,
+      xlim = c(74, Inf),
+      segment.color = "grey70", segment.size = 0.3,
+      min.segment.length = 0, box.padding = 0.2,
+      show.legend = FALSE
+    ) +
+    scale_color_manual(values = combined_language_colors, drop = TRUE) +
+    scale_x_continuous(breaks = seq(0, 72, 12), limits = c(0, 104),
+                       expand = expansion(mult = c(0.01, 0))) +
+    scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+    labs(
+      title = paste(scope, "Negation"),
+      x = "Child Age (Months)",
+      y = y_label,
+      color = "Language"
+    ) +
+    theme_bw(base_size = plot_base_size) +
+    theme(
+      plot.title = element_text(size = rel(1.3), hjust = 0.5),
+      axis.text = element_text(color = "grey15"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "grey92"),
+      legend.position = "bottom"
+    )
+}
+```
+
+## Plot Sentential Growth Curves
+
+Plots `combined_sentential_curve_plot` by calling `plot_scope_curves("Sentential")`.
+
+```{r sentential_curves, fig.width=10, fig.height=6}
+combined_sentential_curve_plot <- plot_scope_curves("Sentential")
+combined_sentential_curve_plot
+```
+
+## Plot Discourse Growth Curves
+
+Plots `combined_discourse_curve_plot` by calling `plot_scope_curves("Discourse")`.
+
+```{r discourse_curves, fig.width=10, fig.height=6}
+combined_discourse_curve_plot <- plot_scope_curves("Discourse")
+combined_discourse_curve_plot
+```
+
+# Plot Onset Estimates
+
+Plots `Estimate` with `Q2.5`–`Q97.5` intervals for each word, grouping rows by `language` and earliest onset. Uses `category` to color and shape the Sentential and Discourse estimates within each row.
+
+```{r onset_plot, fig.width=9, fig.height=7}
+# Colors for the two scopes (shape is a second cue, so color is never the only one).
+combined_scope_colors <- c(Sentential = "#2a78d6", Discourse = "#eb6834")
+combined_scope_shapes <- c(Sentential = 16, Discourse = 17)
+
+combined_onset_plot_data <- combined_onsets %>%
+  filter(is.finite(Estimate)) %>%
+  mutate(label = paste0(word, " (", language, ")")) %>%
+  # One row per word: grouped by language, words within a language by earliest onset.
+  group_by(language, label) %>%
+  mutate(row_first = min(Estimate)) %>%
+  ungroup() %>%
+  arrange(language, row_first) %>%
+  mutate(
+    row = match(label, unique(label)),
+    # Top of the plot = first row; sentential just above discourse within a row.
+    y = -row + if_else(category == "Sentential", 0.17, -0.17)
+  )
+
+combined_onset_rows <- combined_onset_plot_data %>% distinct(row, label)
+
+combined_onset_plot <-
+  ggplot(combined_onset_plot_data,
+         aes(x = Estimate, y = y, color = category, shape = category)) +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "grey60") +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5), size = 0.6, linewidth = 1) +
+  scale_y_continuous(breaks = -combined_onset_rows$row,
+                     labels = combined_onset_rows$label,
+                     expand = expansion(add = 0.5)) +
+  scale_x_continuous(breaks = seq(0, 72, 6), expand = expansion(mult = 0.01)) +
+  coord_cartesian(xlim = c(0, 72)) +
+  scale_color_manual(values = combined_scope_colors, name = NULL) +
+  scale_shape_manual(values = combined_scope_shapes, name = NULL) +
+  labs(
+    title = "Estimated Onset of Negation",
+    x = "Fitted lag (months), with 95% credible interval",
+    y = NULL,
+    caption = "Dashed line: end of the 0–10-month zero baseline; estimates near it are left-censored."
+  ) +
+  theme_bw(base_size = plot_base_size) +
+  theme(
+    plot.title = element_text(size = rel(1.3), hjust = 0.5),
+    axis.text = element_text(color = "grey15"),
+    plot.caption = element_text(size = rel(0.75), color = "grey40", hjust = 0),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.position = "top"
+  )
+
+combined_onset_plot
+```
+
+# Save Figures
+
+Saves `combined_sentential_curve_plot`, `combined_discourse_curve_plot`, and `combined_onset_plot` as RDS and PNG files in `summary_dir`.
+
+```{r save_figures}
+combined_figures <- list(
+  combined_sentential_curve_plot = c(10, 6),
+  combined_discourse_curve_plot  = c(10, 6),
+  combined_onset_plot            = c(10, 6)
+)
+
+for (name in names(combined_figures)) {
+  plot <- get(name)
+  size <- combined_figures[[name]]
+  saveRDS(plot, file.path(summary_dir, paste0(name, ".RDS")))
+  ggsave(file.path(summary_dir, paste0(name, ".png")), plot,
+         width = size[1], height = size[2], dpi = 300)
+}
+```
